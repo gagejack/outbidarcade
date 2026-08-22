@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ site_name }}{% endblock %}</title>
+<meta name="description" content="{% block description %}Pay-to-rank leaderboard for video games. The amount you pay is your score. Highest total sits at #1.{% endblock %}">
+<meta property="og:title" content="{{ self.title() }}">
+<meta property="og:description" content="{{ self.description() }}">
+<meta property="og:type" content="website">
+<link rel="icon" href="/static/icon.svg?v={{ v }}" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css?v={{ v }}">
+</head>
+<body>
+<div class="scanlines" aria-hidden="true"></div>
+<header class="topbar">
+  <a class="brand" href="/">
+    <span class="brand-mark">OB</span>
+    <span class="brand-text">OUTBID<span class="accent">ARCADE</span></span>
+  </a>
+  <nav>
+    <a href="/">Board</a>
+    <a href="/rules">Rules</a>
+    {% if is_admin %}<a href="/admin">Admin</a>{% endif %}
+    <a class="btn btn-small" href="/submit">List a game</a>
+  </nav>
+</header>
+
+{% block body %}{% endblock %}
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div>
+      <strong>{{ site_name }}</strong>
+      <p class="muted small">{{ tagline }} No ads, no algorithm, no mercy.</p>
+    </div>
+    <div class="footer-links">
+      <a href="/">Board</a>
+      <a href="/submit">List a game</a>
+      <a href="/rules">Rules</a>
+      <a href="/admin">Operator</a>
+    </div>
+  </div>
+  <p class="muted tiny center">Bids are final and never expire. Entertainment, not investment.</p>
+</footer>
+<script src="/static/app.js?v={{ v }}" defer></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Set up the operator account · {{ site_name }}{% endblock %}
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">First run</p>
+  <h1>Claim the operator account</h1>
+  <p class="lede">Nobody has set a password for this board yet. Whoever sets it first runs the site,
+  so do this now, before you share the link with anyone.</p>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  <form class="card form" method="post" action="/admin/claim">
+    <label>Password
+      <input type="password" name="password" required minlength="10" autocomplete="new-password">
+      <span class="hint">At least 10 characters. Store it in your password manager, there is no reset.</span>
+    </label>
+    <label>Repeat password
+      <input type="password" name="confirm" required minlength="10" autocomplete="new-password">
+    </label>
+    <button class="btn btn-big" type="submit">Claim this board</button>
+  </form>
+</main>
+{% endblock %}

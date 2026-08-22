@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ listing.title }} · your listing{% endblock %}
+{% block description %}Your private listing page: payment, status and top-ups.{% endblock %}
+
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">Your private listing page</p>
+  <h1>{{ listing.title }}</h1>
+  <p class="lede">{{ listing.tagline }}</p>
+
+  <div class="card status-card">
+    {% if listing.total > 0 %}
+      <p class="status-live">LIVE ON THE BOARD</p>
+      <p class="big-price">{{ listing.total | money }}</p>
+      <p class="muted">Currently ranked <strong>#{{ listing.rank }}</strong>.
+      {% if listing.rank == 1 %}You are the king of the board.
+      {% else %}{{ (stats.top - listing.total + 1) | money }} more takes #1.{% endif %}</p>
+      <a class="btn btn-ghost" href="/game/{{ listing.id }}">View public page</a>
+    {% else %}
+      <p class="status-pending">WAITING ON PAYMENT</p>
+      <p class="muted">Your spot is reserved but not public yet. It appears on the board the moment
+      the operator confirms your payment.</p>
+    {% endif %}
+  </div>
+
+  {% set pending_total = bids | selectattr('status', 'equalto', 'pending') | map(attribute='amount') | sum %}
+  {% if pending_total %}
+  <div class="card pay-card">
+    <h2>Pay {{ pending_total | money }}</h2>
+    {% if payment_link %}
+      <p>Send exactly {{ pending_total | money }} and mention <code>{{ listing.title }}</code> so it can be matched to your listing.</p>
+      <a class="btn btn-big" href="{{ payment_link }}" target="_blank" rel="noopener">Pay {{ pending_total | money }}</a>
+    {% else %}
+      <p>Payment details are being set up. The operator will contact you at
+      {% if listing.email %}<strong>{{ listing.email }}</strong>{% else %}the address you left{% endif %}
+      with how to send {{ pending_total | money }}.</p>
+    {% endif %}
+    {% if payment_note %}<p class="muted small pay-note">{{ payment_note }}</p>{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="card" id="bids">
+    <h2>Top up</h2>
+    <p class="muted small">Bids stack. Every confirmed dollar adds to your total, forever.</p>
+    {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+    <form class="form inline-form" method="post" action="/listing/{{ listing.manage_token }}/topup">
+      <div class="bid-input">
+        <span class="dollar">$</span>
+        <input name="amount" inputmode="numeric" required placeholder="{{ (stats.top - listing.total + 1) if stats.top >= listing.total else min_top_up }}">
+      </div>
+      <button class="btn" type="submit">Add to my total</button>
+    </form>
+
+    <table class="bids">
+      <tr><th>Bid</th><th>Status</th><th>When</th></tr>
+      {% for b in bids %}
+      <tr>
+        <td class="mono">{{ b.amount | money }}</td>
+        <td><span class="tag tag-{{ b.status }}">{{ b.status }}</span></td>
+        <td class="muted tiny">{{ b.created_at | ago }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Keep this link</h2>
+    <p class="muted small">This page is your listing. Anyone with the link can top it up, so keep it
+    to yourself and bookmark it now.</p>
+    <input class="copy-field" readonly value="{{ request.base_url }}listing/{{ listing.manage_token }}" onclick="this.select()">
+  </div>
+</main>
+{% endblock %}

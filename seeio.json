@@ -1,0 +1,4 @@
+{
+  "name": "Outbid Arcade",
+  "healthcheck": "/healthz"
+}

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Rules · {{ site_name }}{% endblock %}
+{% block description %}The full rules of the board: bidding, ranking, top-ups, refunds, moderation.{% endblock %}
+
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">The whole thing on one page</p>
+  <h1>Rules</h1>
+
+  <div class="card rules">
+    <h2>1. Pay what you want</h2>
+    <p>Minimum {{ min_first | money }}, whole US dollars, no maximum worth mentioning. There is no
+    fixed price for a spot because there are no spots for sale, only numbers.</p>
+
+    <h2>2. The amount you pay is your score</h2>
+    <p>The board sorts by score, highest first. Ties go to whoever got there first. That is the
+    entire ranking algorithm.</p>
+
+    <h2>3. Top-ups stack</h2>
+    <p>Add money to a listing any time from your private listing page. Every confirmed bid adds to
+    the same running total, so a game that paid {{ min_first | money }} four times sits at
+    {{ (min_first * 4) | money }}.</p>
+
+    <h2>4. Bids never expire, and never come back</h2>
+    <p>Your listing stays up and your total stays counted. Nothing is refunded when somebody passes
+    you, which is exactly why the top number only ever goes up. Bid what you would be happy to have
+    spent on a good ad.</p>
+
+    <h2>5. Games only</h2>
+    <p>Video games, demos, mods, game jams, playable prototypes, storefront pages. Anything you can
+    actually play or wishlist. No crypto, no gambling, no adult content, no malware, nothing
+    illegal. Listings that break this get removed without a refund.</p>
+
+    <h2>6. Every listing is checked before it goes live</h2>
+    <p>You reserve a spot, you pay, the operator confirms the payment, the listing appears. Nothing
+    on the board is there without a real payment behind it.</p>
+
+    <h2>7. This is entertainment</h2>
+    <p>It is a dollar auction with cover art. It is not an investment, the ranking means nothing
+    about quality, and the money is spent the moment it is sent.</p>
+  </div>
+
+  <div class="board-cta">
+    <p>{% if stats.listings %}{{ stats.to_lead | money }} takes #1 right now.{% else %}The board is empty. {{ min_first | money }} makes you #1.{% endif %}</p>
+    <a class="btn btn-big" href="/submit">List your game</a>
+  </div>
+</main>
+{% endblock %}

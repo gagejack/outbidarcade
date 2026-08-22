@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ listing.title }} · #{{ listing.rank }} on {{ site_name }}{% endblock %}
+{% block description %}{{ listing.tagline }}{% endblock %}
+
+{% block body %}
+<main class="page narrow">
+  <p class="kicker"><a class="link" href="/">← Back to the board</a></p>
+  <div class="card game-card">
+    {% if listing.image_url %}<img class="game-art" src="{{ listing.image_url }}" alt="{{ listing.title }} cover art" referrerpolicy="no-referrer" onerror="this.remove()">{% endif %}
+    <p class="rank-badge">#{{ listing.rank }}</p>
+    <h1>{{ listing.title }}</h1>
+    <p class="lede">{{ listing.tagline }}</p>
+    <p class="muted small">
+      {% if listing.studio %}{{ listing.studio }} · {% endif %}
+      {% for p in listing.platform_list %}<span class="chip">{{ p }}</span>{% endfor %}
+    </p>
+    <p class="big-price">{{ listing.total | money }}</p>
+    <p class="muted small">Paid across {{ listing.bid_count }} bid{{ '' if listing.bid_count == 1 else 's' }}, first listed {{ listing.live_at | ago }}.</p>
+    <div class="champion-actions">
+      <a class="btn" href="{{ listing.url }}" target="_blank" rel="nofollow noopener">Open the game</a>
+      <a class="btn btn-ghost" href="/submit">Outbid it</a>
+    </div>
+  </div>
+  <p class="center muted small">
+    {% if listing.rank == 1 %}This is the top of the board. {{ (listing.total + 1) | money }} takes it from them.
+    {% else %}{{ (stats.top + 1) | money }} would put your game above everything here.{% endif %}
+  </p>
+</main>
+{% endblock %}

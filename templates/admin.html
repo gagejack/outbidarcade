@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Operator · {{ site_name }}{% endblock %}
+{% block body %}
+<main class="page">
+  <div class="admin-head">
+    <div>
+      <p class="kicker">Operator</p>
+      <h1>Run the board</h1>
+    </div>
+    <form method="post" action="/admin/logout"><button class="btn btn-ghost btn-small" type="submit">Sign out</button></form>
+  </div>
+
+  <div class="tickers">
+    <div class="tick"><span class="tick-num">{{ stats.volume | money }}</span><span class="tick-label">Confirmed volume</span></div>
+    <div class="tick"><span class="tick-num">{{ stats.top | money }}</span><span class="tick-label">Top bid</span></div>
+    <div class="tick"><span class="tick-num">{{ stats.listings }}</span><span class="tick-label">Live listings</span></div>
+    <div class="tick"><span class="tick-num">{{ pending | length }}</span><span class="tick-label">Waiting on you</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Payment queue</h2>
+    <p class="muted small">A bid becomes public the moment you confirm it. Confirm only what you
+    have actually been paid.</p>
+    {% if pending %}
+    <table class="admin-table">
+      <tr><th>Game</th><th>Bid</th><th>Total after</th><th>Contact</th><th>Age</th><th></th></tr>
+      {% for b in pending %}
+      <tr>
+        <td><a href="{{ b.url }}" target="_blank" rel="noopener nofollow">{{ b.title }}</a><br>
+            <a class="tiny muted" href="/listing/{{ b.manage_token }}">private page</a></td>
+        <td class="mono">{{ b.amount | money }}</td>
+        <td class="mono">{{ (b.confirmed_total + b.amount) | money }}</td>
+        <td class="tiny">{{ b.email or '-' }}</td>
+        <td class="tiny muted">{{ b.created_at | ago }}</td>
+        <td class="actions">
+          <form method="post" action="/admin/action"><input type="hidden" name="action" value="confirm"><input type="hidden" name="bid_id" value="{{ b.id }}"><button class="btn btn-small" type="submit">Paid</button></form>
+          <form method="post" action="/admin/action"><input type="hidden" name="action" value="reject"><input type="hidden" name="bid_id" value="{{ b.id }}"><button class="btn btn-ghost btn-small" type="submit">Reject</button></form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">Nothing waiting. Every bid is settled.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Payment settings</h2>
+    <p class="muted small">Paste a payment link (Stripe payment link, PayPal.me, Ko-fi, whatever you
+    use). Bidders see it on their private page right after they submit. Without a link they are told
+    you will email them.</p>
+    <form class="form" method="post" action="/admin/action">
+      <input type="hidden" name="action" value="settings">
+      <label>Payment link
+        <input name="payment_link" value="{{ payment_link }}" placeholder="https://buy.stripe.com/...">
+      </label>
+      <label>Note shown next to the payment button
+        <textarea name="payment_note" rows="3" placeholder="Put your game name in the payment reference. Listings go live within a few hours.">{{ payment_note }}</textarea>
+      </label>
+      <label class="check"><input type="checkbox" name="auto_confirm" value="1"{% if auto_confirm %} checked{% endif %}><span>Free mode: confirm every bid automatically, no payment needed</span></label>
+      <span class="hint">Handy for a launch week or a test run. Leave it off to run the board for real money.</span>
+      <button class="btn" type="submit">Save settings</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>All listings</h2>
+    <table class="admin-table">
+      <tr><th>Game</th><th>Total</th><th>State</th><th></th></tr>
+      {% for l in listings %}
+      <tr>
+        <td><a href="{{ l.url }}" target="_blank" rel="noopener nofollow">{{ l.title }}</a>
+            <span class="tiny muted">{{ l.tagline }}</span></td>
+        <td class="mono">{{ l.total | money }}</td>
+        <td>{% if l.hidden %}<span class="tag tag-rejected">hidden</span>{% elif l.total > 0 %}<span class="tag tag-confirmed">live</span>{% else %}<span class="tag tag-pending">unpaid</span>{% endif %}</td>
+        <td class="actions">
+          <form method="post" action="/admin/action"><input type="hidden" name="action" value="{{ 'unhide' if l.hidden else 'hide' }}"><input type="hidden" name="listing_id" value="{{ l.id }}"><button class="btn btn-ghost btn-small" type="submit">{{ 'Unhide' if l.hidden else 'Hide' }}</button></form>
+          <form method="post" action="/admin/action" onsubmit="return confirm('Delete {{ l.title }} and all its bids?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="listing_id" value="{{ l.id }}"><button class="btn btn-ghost btn-small danger" type="submit">Delete</button></form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</main>
+{% endblock %}

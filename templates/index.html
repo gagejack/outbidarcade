@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ site_name }}: pay-to-rank leaderboard for video games{% endblock %}
+
+{% block body %}
+<section class="hero">
+  <p class="kicker">One board. One number that matters.</p>
+  <h1>The highest bidder is the <span class="accent">#1 game</span> on the internet.</h1>
+  <p class="lede">Pay what you want to list your game. The amount you pay is your score. The board
+  sorts by score, bids never expire, and the only way past someone is through their wallet.</p>
+
+  <div class="hero-cta">
+    <a class="btn btn-big" href="/submit">List your game</a>
+    <span class="cta-note">
+      {% if stats.listings %}
+        {{ stats.to_lead | money }} takes #1 right now
+      {% else %}
+        The board is empty. {{ min_first | money }} makes you #1.
+      {% endif %}
+    </span>
+  </div>
+
+  <div class="tickers">
+    <div class="tick"><span class="tick-num" data-tick="top">{{ stats.top | money }}</span><span class="tick-label">Top bid</span></div>
+    <div class="tick"><span class="tick-num" data-tick="to_lead">{{ stats.to_lead | money }}</span><span class="tick-label">Cost to take #1</span></div>
+    <div class="tick"><span class="tick-num" data-tick="listings">{{ stats.listings }}</span><span class="tick-label">Games on the board</span></div>
+    <div class="tick"><span class="tick-num" data-tick="volume">{{ stats.volume | money }}</span><span class="tick-label">Total bid</span></div>
+  </div>
+</section>
+
+{% if events %}
+<div class="feed" aria-label="Recent activity">
+  <div class="feed-track">
+    {% for e in events %}<span class="feed-item">▸ {{ e.text }} <em>{{ e.created_at | ago }}</em></span>{% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<main class="board-wrap" id="board">
+  {% if rows %}
+    {% set leader = rows[0] %}
+    <article class="champion">
+      <div class="champion-badge">#1 ON THE BOARD</div>
+      <div class="champion-body">
+        {% if leader.image_url %}<img class="champion-art" src="{{ leader.image_url }}" alt="{{ leader.title }} cover art" loading="lazy" referrerpolicy="no-referrer" data-initial="{{ leader.title[0] | upper }}">
+        {% else %}<span class="champion-art thumb-blank">{{ leader.title[0] | upper }}</span>{% endif %}
+        <div>
+          <h2>{{ leader.title }}</h2>
+          <p class="champion-tag">{{ leader.tagline }}</p>
+          <p class="muted small">
+            {% if leader.studio %}{{ leader.studio }} · {% endif %}
+            {% for p in leader.platform_list %}<span class="chip">{{ p }}</span>{% endfor %}
+          </p>
+          <div class="champion-actions">
+            <a class="btn" href="{{ leader.url }}" target="_blank" rel="nofollow noopener">Play it</a>
+            <a class="btn btn-ghost" href="/game/{{ leader.id }}">Details</a>
+          </div>
+        </div>
+        <div class="champion-price">
+          <span class="price">{{ leader.total | money }}</span>
+          <span class="muted tiny">paid across {{ leader.bid_count }} bid{{ '' if leader.bid_count == 1 else 's' }}</span>
+        </div>
+      </div>
+      <div class="champion-foot">
+        Dethrone it for {{ stats.to_lead | money }} <a href="/submit">→ list your game</a>
+      </div>
+    </article>
+
+    <ol class="board">
+      {% for row in rows[1:] %}
+      <li class="row">
+        <span class="rank">{{ row.rank }}</span>
+        {% if row.image_url %}<img class="thumb" src="{{ row.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer" data-initial="{{ row.title[0] | upper }}">
+        {% else %}<span class="thumb thumb-blank">{{ row.title[0] | upper }}</span>{% endif %}
+        <div class="row-main">
+          <a class="row-title" href="{{ row.url }}" target="_blank" rel="nofollow noopener">{{ row.title }}</a>
+          <p class="row-tag">{{ row.tagline }}</p>
+          <p class="row-meta muted tiny">
+            {% if row.studio %}{{ row.studio }} · {% endif %}
+            {% for p in row.platform_list %}<span class="chip">{{ p }}</span>{% endfor %}
+            <a class="row-detail" href="/game/{{ row.id }}">details</a>
+          </p>
+        </div>
+        <span class="row-price">{{ row.total | money }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+
+    <div class="board-cta">
+      <p>Every spot above is for sale. Beat the number, take the slot.</p>
+      <a class="btn btn-big" href="/submit">List your game</a>
+    </div>
+  {% else %}
+    <div class="empty">
+      <p class="empty-rank">#1</p>
+      <h2>Unclaimed</h2>
+      <p class="lede">Nobody has bid yet. The first {{ min_first | money }} on this board buys the
+      top spot outright, and everyone after has to pay more than you to move you down.</p>
+      <a class="btn btn-big" href="/submit">Claim #1 for {{ min_first | money }}</a>
+    </div>
+  {% endif %}
+</main>
+
+<section class="how">
+  <h2>How it works</h2>
+  <div class="how-grid">
+    <div class="how-card"><span class="how-num">01</span><h3>Pay what you want</h3><p>Minimum {{ min_first | money }}, whole dollars. Your game, your link, your number.</p></div>
+    <div class="how-card"><span class="how-num">02</span><h3>The number is your score</h3><p>No votes, no reviews, no algorithm. The board sorts by dollars, highest first.</p></div>
+    <div class="how-card"><span class="how-num">03</span><h3>Top-ups stack</h3><p>Get passed? Add more. Your bids add together into one running total.</p></div>
+    <div class="how-card"><span class="how-num">04</span><h3>Nothing expires</h3><p>Your listing stays up forever. So does everyone else's number, which is why it only goes up.</p></div>
+  </div>
+  <p class="center"><a class="link" href="/rules">Read the full rules →</a></p>
+</section>
+{% endblock %}

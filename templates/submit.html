@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}List a game · {{ site_name }}{% endblock %}
+{% block description %}Put your game on the board. Pay what you want, the amount is your score.{% endblock %}
+
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">Step 1 of 2</p>
+  <h1>Put your game on the board</h1>
+  <p class="lede">
+    {% if stats.listings %}
+      {{ stats.to_lead | money }} takes #1 today. Anything from {{ min_first | money }} gets you on
+      the board somewhere.
+    {% else %}
+      The board is empty, so {{ min_first | money }} makes you #1 right now.
+    {% endif %}
+  </p>
+
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+
+  <form class="card form" method="post" action="/submit">
+    <label>Game name
+      <input name="title" maxlength="70" required value="{{ form.title or '' }}" placeholder="Cursed Delve">
+    </label>
+    <label>One-line pitch
+      <input name="tagline" maxlength="140" required value="{{ form.tagline or '' }}" placeholder="A roguelike where the dungeon remembers how you died">
+    </label>
+    <label>Link
+      <input name="url" required value="{{ form.url or '' }}" placeholder="store.steampowered.com/app/...">
+      <span class="hint">Steam, itch.io, App Store, your own page. Anything that opens.</span>
+    </label>
+    <label>Cover image URL <span class="opt">optional</span>
+      <input name="image_url" value="{{ form.image_url or '' }}" placeholder="https://.../capsule.jpg">
+      <span class="hint">A wide capsule or key art looks best. Leave blank for a plain tile.</span>
+    </label>
+    <div class="form-row">
+      <label>Studio or dev <span class="opt">optional</span>
+        <input name="studio" maxlength="60" value="{{ form.studio or '' }}" placeholder="Two people and a cat">
+      </label>
+      <label>Your email <span class="opt">private</span>
+        <input name="email" type="email" maxlength="120" value="{{ form.email or '' }}" placeholder="you@studio.com">
+        <span class="hint">Only used to reach you about your listing. Never shown.</span>
+      </label>
+    </div>
+
+    <fieldset class="platforms">
+      <legend>Platforms <span class="opt">pick up to 4</span></legend>
+      {% for p in platforms %}
+      <label class="check"><input type="checkbox" name="platforms" value="{{ p }}"{% if form.platforms and p in form.platforms.split(',') %} checked{% endif %}><span>{{ p }}</span></label>
+      {% endfor %}
+    </fieldset>
+
+    <label class="bid-field">Your bid
+      <div class="bid-input">
+        <span class="dollar">$</span>
+        <input name="amount" inputmode="numeric" required value="{{ form.amount or '' }}" placeholder="{{ stats.to_lead }}">
+      </div>
+      <span class="hint">Whole dollars, minimum {{ min_first | money }}. This number is your score,
+      and it is public. You can always top it up later.</span>
+    </label>
+
+    <div class="quickbids">
+      <button type="button" class="pill" data-bid="{{ min_first }}">{{ min_first | money }} get on the board</button>
+      <button type="button" class="pill" data-bid="{{ stats.to_lead }}">{{ stats.to_lead | money }} take #1</button>
+      <button type="button" class="pill" data-bid="{{ stats.to_lead + 50 }}">{{ (stats.to_lead + 50) | money }} take #1 with room</button>
+    </div>
+
+    <input class="honeypot" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <button class="btn btn-big" type="submit">Reserve my spot</button>
+    <p class="tiny muted">Next you get a private link with payment details. Your listing goes live
+    once the operator confirms the payment. Bids are final and never refunded.</p>
+  </form>
+</main>
+{% endblock %}
