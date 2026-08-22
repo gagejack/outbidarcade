@@ -59,9 +59,15 @@
     </label>
 
     <div class="quickbids">
-      <button type="button" class="pill" data-bid="{{ min_first }}">{{ min_first | money }} get on the board</button>
-      <button type="button" class="pill" data-bid="{{ stats.to_lead }}">{{ stats.to_lead | money }} take #1</button>
-      <button type="button" class="pill" data-bid="{{ stats.to_lead + 50 }}">{{ (stats.to_lead + 50) | money }} take #1 with room</button>
+      {% if stats.listings %}
+        <button type="button" class="pill" data-bid="{{ min_first }}">{{ min_first | money }} get on the board</button>
+        <button type="button" class="pill" data-bid="{{ stats.to_lead }}">{{ stats.to_lead | money }} take #1</button>
+        <button type="button" class="pill" data-bid="{{ stats.to_lead + 50 }}">{{ (stats.to_lead + 50) | money }} take #1 with room</button>
+      {% else %}
+        <button type="button" class="pill" data-bid="{{ min_first }}">{{ min_first | money }} claim #1</button>
+        <button type="button" class="pill" data-bid="25">$25 claim #1 and set a floor</button>
+        <button type="button" class="pill" data-bid="100">$100 make it awkward for everyone else</button>
+      {% endif %}
     </div>
 
     <input class="honeypot" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">

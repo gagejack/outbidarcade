@@ -28,3 +28,10 @@ board. There is no reset. This must be done before the site is shared.
 - Which payment link to use (Stripe payment link is the simplest).
 - Whether to run a free launch week (free mode) before switching to paid.
 - Whether listings should ever be time-limited (currently: never, by design).
+
+## Testing
+`tests/smoke.py` walks the whole flow (submit, confirm, top-up, hide, delete)
+against a running instance with a throwaway DATA_DIR:
+
+    DATA_DIR=/tmp/oa uvicorn main:app --port 8099 &
+    python tests/smoke.py http://127.0.0.1:8099
