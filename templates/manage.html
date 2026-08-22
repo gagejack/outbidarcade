@@ -10,12 +10,19 @@
 
   <div class="card status-card">
     {% if listing.total > 0 %}
-      <p class="status-live">LIVE ON THE BOARD</p>
-      <p class="big-price">{{ listing.total | money }}</p>
-      <p class="muted">Currently ranked <strong>#{{ listing.rank }}</strong>.
-      {% if listing.rank == 1 %}You are the king of the board.
-      {% else %}{{ (stats.top - listing.total + 1) | money }} more takes #1.{% endif %}</p>
-      <a class="btn btn-ghost" href="/game/{{ listing.id }}">View public page</a>
+      {% if listing.rank %}
+        <p class="status-live">LIVE ON THE BOARD</p>
+        <p class="big-price">{{ listing.total | money }}</p>
+        <p class="muted">Currently ranked <strong>#{{ listing.rank }}</strong>.
+        {% if listing.rank == 1 %}You are the king of the board.
+        {% else %}{{ (stats.top - listing.total + 1) | money }} more takes #1.{% endif %}</p>
+        <a class="btn btn-ghost" href="/game/{{ listing.id }}">View public page</a>
+      {% else %}
+        <p class="status-pending">OFF THE BOARD</p>
+        <p class="big-price">{{ listing.total | money }}</p>
+        <p class="muted">This listing is not showing publicly right now. Reply to the operator if
+        you think that is a mistake.</p>
+      {% endif %}
     {% else %}
       <p class="status-pending">WAITING ON PAYMENT</p>
       <p class="muted">Your spot is reserved but not public yet. It appears on the board the moment

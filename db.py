@@ -61,6 +61,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind TEXT NOT NULL,
                 text TEXT NOT NULL,
+                listing_id INTEGER,
                 created_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS settings (
@@ -74,6 +75,12 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_bids_listing ON bids(listing_id);
             """
         )
+        # Migrations for databases created by an older build. /data outlives
+        # deploys, so new columns have to be added, not assumed.
+        for table, column, decl in (("events", "listing_id", "INTEGER"),):
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 # ---------------------------------------------------------------- settings
@@ -210,6 +217,7 @@ def get_listing(listing_id: int) -> dict | None:
         ).fetchone()
     item.update(dict(totals))
     item["platform_list"] = [p for p in item["platforms"].split(",") if p]
+    item["rank"] = None
     if item["total"] > 0 and not item["hidden"]:
         for entry in board():
             if entry["id"] == listing_id:
@@ -295,7 +303,7 @@ def confirm_bid(bid_id: int) -> None:
             text += " and took #1"
         elif rank:
             text += f" (#{rank})"
-        log_event("bid", text)
+        log_event("bid", text, listing_data["id"])
 
 
 def reject_bid(bid_id: int) -> None:
@@ -311,6 +319,7 @@ def set_hidden(listing_id: int, hidden: bool) -> None:
 def delete_listing(listing_id: int) -> None:
     with connect() as conn:
         conn.execute("DELETE FROM bids WHERE listing_id=?", (listing_id,))
+        conn.execute("DELETE FROM events WHERE listing_id=?", (listing_id,))
         conn.execute("DELETE FROM listings WHERE id=?", (listing_id,))
 
 
@@ -336,11 +345,11 @@ def all_listings() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def log_event(kind: str, text: str) -> None:
+def log_event(kind: str, text: str, listing_id: int | None = None) -> None:
     with connect() as conn:
         conn.execute(
-            "INSERT INTO events(kind, text, created_at) VALUES(?,?,?)",
-            (kind, text, int(time.time())),
+            "INSERT INTO events(kind, text, listing_id, created_at) VALUES(?,?,?,?)",
+            (kind, text, listing_id, int(time.time())),
         )
         conn.execute(
             "DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT 200)"
@@ -350,7 +359,10 @@ def log_event(kind: str, text: str) -> None:
 def recent_events(limit: int = 8) -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT e.* FROM events e LEFT JOIN listings l ON l.id = e.listing_id"
+            " WHERE e.listing_id IS NULL OR (l.id IS NOT NULL AND l.hidden = 0)"
+            " ORDER BY e.id DESC LIMIT ?",
+            (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
 
