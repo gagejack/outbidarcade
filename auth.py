@@ -132,6 +132,19 @@ def issue_reset(user_id: int) -> str:
     return token
 
 
+def reset_is_live(token: str) -> bool:
+    """True when the token would be accepted. Does not consume it."""
+    if not token:
+        return False
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM reset_tokens WHERE token_hash=?"
+            " AND used_at IS NULL AND expires_at > ?",
+            (_hash_token(token), int(time.time())),
+        ).fetchone()
+    return row is not None
+
+
 def consume_reset(token: str) -> int | None:
     if not token:
         return None

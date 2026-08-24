@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Create an account · {{ site_name }}{% endblock %}
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">Your account</p>
+  <h1>Create an account</h1>
+  <p class="lede">One account holds every game you list.</p>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+
+  {% if providers %}
+  <div class="card provider-card">
+    {% if 'google' in providers %}
+    <a class="btn btn-provider" href="/auth/google">Continue with Google</a>
+    {% endif %}
+    {% if 'github' in providers %}
+    <a class="btn btn-provider" href="/auth/github">Continue with GitHub</a>
+    {% endif %}
+    <p class="muted tiny center">or use your email</p>
+  </div>
+  {% endif %}
+
+  <form class="card form" method="post" action="/register">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Email
+      <input type="email" name="email" required autocomplete="email" value="{{ form.email or '' }}">
+    </label>
+    <label>Name <span class="opt">optional</span>
+      <input name="display_name" maxlength="60" value="{{ form.display_name or '' }}" placeholder="Two people and a cat">
+    </label>
+    <label>Password
+      <input type="password" name="password" required autocomplete="new-password">
+      <span class="hint">At least 10 characters.</span>
+    </label>
+    <label>Confirm password
+      <input type="password" name="confirm" required autocomplete="new-password">
+    </label>
+    <button class="btn btn-big" type="submit">Create account</button>
+    <p class="tiny muted">Already have one? <a href="/login">Sign in</a>.</p>
+  </form>
+</main>
+{% endblock %}

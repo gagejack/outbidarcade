@@ -27,7 +27,7 @@
       {% for b in pending %}
       <tr>
         <td><a href="{{ b.url }}" target="_blank" rel="noopener nofollow">{{ b.title }}</a><br>
-            <a class="tiny muted" href="/listing/{{ b.manage_token }}">private page</a></td>
+            <a class="tiny muted" href="/listing/{{ b.listing_id }}">listing</a></td>
         <td class="mono">{{ b.amount | money }}</td>
         <td class="mono">{{ (b.confirmed_total + b.amount) | money }}</td>
         <td class="tiny">{{ b.email or '-' }}</td>

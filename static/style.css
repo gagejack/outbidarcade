@@ -292,3 +292,9 @@ input:focus, textarea:focus { outline: 2px solid rgba(77, 240, 255, .5); outline
   .topbar nav { gap: .8rem; font-size: .85rem; }
   .admin-table td.actions { flex-direction: column; }
 }
+
+.provider-card { display: grid; gap: .6rem; }
+.btn-provider { display: block; text-align: center; }
+.inline-logout { display: inline; }
+.linkish { background: none; border: 0; padding: 0; font: inherit;
+           color: inherit; cursor: pointer; text-decoration: underline; }

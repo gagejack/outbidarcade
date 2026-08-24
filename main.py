@@ -6,6 +6,7 @@ bids never expire and top-ups stack. State lives in SQLite under /data.
 
 from __future__ import annotations
 
+import secrets
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -21,12 +22,41 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import auth
 import db
+import mail
+import oauth
 
 ASSET_VERSION = "1"
 PLATFORMS = ["PC", "Steam", "Switch", "PS5", "Xbox", "Mobile", "Web", "VR", "itch.io"]
 SITE_NAME = "Outbid Arcade"
 TAGLINE = "The pay-to-rank leaderboard for video games."
+
+USER_COOKIE = "oa_user"
+CSRF_COOKIE = "oa_csrf"
+DRAFT_COOKIE = "oa_draft"
+STATE_COOKIE = "oa_state"
+
+
+def secure_cookies() -> bool:
+    return oauth.base_url().startswith("https://")
+
+
+def current_user(request: Request) -> dict | None:
+    return auth.user_for_session(request.cookies.get(USER_COOKIE))
+
+
+def set_session_cookie(resp, token: str) -> None:
+    resp.set_cookie(USER_COOKIE, token, httponly=True, samesite="lax",
+                    secure=secure_cookies(), max_age=db.SESSION_TTL)
+
+
+def csrf_for(request: Request) -> str:
+    return request.cookies.get(CSRF_COOKIE) or auth.new_csrf()
+
+
+def csrf_valid(request: Request, form_value: str) -> bool:
+    return auth.csrf_ok(request.cookies.get(CSRF_COOKIE), form_value)
 
 
 @asynccontextmanager
@@ -62,6 +92,10 @@ templates.env.filters["ago"] = ago
 
 
 def render(request: Request, name: str, ctx: dict | None = None, status: int = 200):
+    user = ctx.pop("_user", None) if ctx else None
+    if user is None:
+        user = current_user(request)
+    token = csrf_for(request)
     data = {
         "request": request,
         "v": ASSET_VERSION,
@@ -71,9 +105,15 @@ def render(request: Request, name: str, ctx: dict | None = None, status: int = 2
         "min_first": db.MIN_FIRST_BID,
         "min_top_up": db.MIN_TOP_UP,
         "is_admin": db.session_valid(request.cookies.get("oa_admin")),
+        "user": user,
+        "csrf": token,
+        "providers": oauth.enabled_providers(),
     }
     data.update(ctx or {})
-    return templates.TemplateResponse(request, name, data, status_code=status)
+    resp = templates.TemplateResponse(request, name, data, status_code=status)
+    resp.set_cookie(CSRF_COOKIE, token, httponly=True, samesite="lax",
+                    secure=secure_cookies(), max_age=86400)
+    return resp
 
 
 # ------------------------------------------------------------ light limits
@@ -283,6 +323,194 @@ def game(request: Request, listing_id: int):
     if not listing or listing["hidden"] or listing["total"] <= 0:
         return render(request, "notfound.html", {}, status=404)
     return render(request, "game.html", {"listing": listing, "stats": db.stats()})
+
+
+# --------------------------------------------------------------------- auth
+
+
+@app.get("/register", response_class=HTMLResponse)
+def register_form(request: Request):
+    if current_user(request):
+        # /dashboard lands in Task 14; until then send a signed-in visitor
+        # who wanders back to /register somewhere that always exists.
+        return RedirectResponse("/", status_code=303)
+    return render(request, "register.html", {"error": None, "form": {}})
+
+
+@app.post("/register", response_class=HTMLResponse)
+async def register(request: Request):
+    raw = await request.form()
+    email = str(raw.get("email", "")).strip()[:120]
+    password = str(raw.get("password", ""))
+    confirm = str(raw.get("confirm", ""))
+    display_name = str(raw.get("display_name", "")).strip()[:60]
+    form = {"email": email, "display_name": display_name}
+
+    def fail(msg: str, status: int = 400):
+        return render(request, "register.html", {"error": msg, "form": form}, status=status)
+
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return fail("That form expired. Try again.")
+    if rate_limited(request, "register", 5, 3600):
+        return fail("Too many sign-ups from here. Try again later.", 429)
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return fail("That does not look like an email address.")
+    problem = auth.password_problem(password)
+    if problem:
+        return fail(problem)
+    if password != confirm:
+        return fail("The two passwords do not match.")
+    if auth.get_user_by_email(email):
+        return fail("There is already an account with that address. Try signing in.")
+
+    user_id = auth.create_user(email, password, display_name)
+    resp = RedirectResponse(next_after_login(request), status_code=303)
+    set_session_cookie(resp, auth.start_session(user_id))
+    return resp
+
+
+def next_after_login(request: Request) -> str:
+    """Send a visitor with a parked submission back to finish it."""
+    if request.cookies.get(DRAFT_COOKIE):
+        return "/submit/resume"
+    return "/dashboard"
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request):
+    if current_user(request):
+        # Same reasoning as register_form: /dashboard doesn't exist until
+        # Task 14, so send an already-signed-in visitor to the board instead.
+        return RedirectResponse("/", status_code=303)
+    return render(request, "login.html", {"error": None, "email": ""})
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login(request: Request):
+    raw = await request.form()
+    email = str(raw.get("email", "")).strip()[:120]
+    password = str(raw.get("password", ""))
+
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "login.html",
+                      {"error": "That form expired. Try again.", "email": email}, status=400)
+    if rate_limited(request, "login", 10, 900):
+        return render(request, "login.html",
+                      {"error": "Too many attempts. Wait 15 minutes.", "email": email},
+                      status=429)
+    user = auth.check_login(email, password)
+    if not user:
+        return render(request, "login.html",
+                      {"error": "Wrong email or password.", "email": email}, status=401)
+    resp = RedirectResponse(next_after_login(request), status_code=303)
+    set_session_cookie(resp, auth.start_session(user["id"]))
+    return resp
+
+
+@app.post("/logout")
+def logout(request: Request):
+    auth.end_session(request.cookies.get(USER_COOKIE))
+    resp = RedirectResponse("/", status_code=303)
+    resp.delete_cookie(USER_COOKIE)
+    return resp
+
+
+@app.get("/forgot", response_class=HTMLResponse)
+def forgot_form(request: Request):
+    return render(request, "forgot.html", {"error": None, "sent": False})
+
+
+@app.post("/forgot", response_class=HTMLResponse)
+async def forgot(request: Request):
+    raw = await request.form()
+    email = str(raw.get("email", "")).strip()[:120]
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "forgot.html",
+                      {"error": "That form expired. Try again.", "sent": False}, status=400)
+    if not rate_limited(request, "forgot", 5, 3600):
+        user = auth.get_user_by_email(email)
+        if user:
+            token = auth.issue_reset(user["id"])
+            mail.send_reset_email(user["email"], f"{oauth.base_url()}/reset/{token}")
+    # The same response either way, so this page cannot be used to discover
+    # which addresses have accounts.
+    return render(request, "forgot.html", {"error": None, "sent": True})
+
+
+@app.get("/reset/{token}", response_class=HTMLResponse)
+def reset_form(request: Request, token: str):
+    if not auth.reset_is_live(token):
+        return render(request, "notfound.html", {}, status=404)
+    return render(request, "reset.html", {"error": None, "token": token})
+
+
+@app.post("/reset/{token}", response_class=HTMLResponse)
+async def reset(request: Request, token: str):
+    raw = await request.form()
+    password = str(raw.get("password", ""))
+    confirm = str(raw.get("confirm", ""))
+
+    def fail(msg: str):
+        return render(request, "reset.html", {"error": msg, "token": token}, status=400)
+
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return fail("That form expired. Try again.")
+    problem = auth.password_problem(password)
+    if problem:
+        return fail(problem)
+    if password != confirm:
+        return fail("The two passwords do not match.")
+
+    user_id = auth.consume_reset(token)
+    if not user_id:
+        return render(request, "notfound.html", {}, status=404)
+    auth.set_password(user_id, password)
+    auth.end_all_sessions(user_id)
+    resp = RedirectResponse("/dashboard", status_code=303)
+    set_session_cookie(resp, auth.start_session(user_id))
+    return resp
+
+
+@app.get("/auth/{provider}")
+def oauth_start(request: Request, provider: str):
+    if not oauth.is_enabled(provider):
+        return render(request, "notfound.html", {}, status=404)
+    if rate_limited(request, "oauth", 20, 3600):
+        return render(request, "login.html",
+                      {"error": "Too many attempts. Try again later.", "email": ""},
+                      status=429)
+    state = secrets.token_urlsafe(24)
+    resp = RedirectResponse(oauth.authorize_url(provider, state), status_code=303)
+    resp.set_cookie(STATE_COOKIE, f"{provider}:{state}", httponly=True,
+                    samesite="lax", secure=secure_cookies(), max_age=600)
+    return resp
+
+
+@app.get("/auth/{provider}/callback")
+def oauth_callback(request: Request, provider: str, code: str = "", state: str = ""):
+    if not oauth.is_enabled(provider):
+        return render(request, "notfound.html", {}, status=404)
+
+    def fail(msg: str, status: int = 400):
+        return render(request, "login.html", {"error": msg, "email": ""}, status=status)
+
+    expected = request.cookies.get(STATE_COOKIE, "")
+    if not state or expected != f"{provider}:{state}":
+        return fail("That sign-in could not be verified. Start again.")
+    if not code:
+        return fail("That sign-in did not complete. Try again.")
+
+    profile = oauth.fetch_profile(provider, code)
+    if not profile:
+        return fail("That provider could not be reached. Try again.")
+    user, error = auth.user_from_profile(profile)
+    if not user:
+        return fail(error)
+
+    resp = RedirectResponse(next_after_login(request), status_code=303)
+    set_session_cookie(resp, auth.start_session(user["id"]))
+    resp.delete_cookie(STATE_COOKIE)
+    return resp
 
 
 # ------------------------------------------------------------------- admin

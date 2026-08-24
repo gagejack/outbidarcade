@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Reset your password · {{ site_name }}{% endblock %}
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">Your account</p>
+  <h1>Reset your password</h1>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if sent %}
+    <div class="card">
+      <p>If there is an account with that address, a reset link is on its way. It
+      expires in an hour and works once.</p>
+      <p class="muted small">Nothing arrived? Check spam, then
+      <a href="/forgot">try again</a>.</p>
+    </div>
+  {% else %}
+    <form class="card form" method="post" action="/forgot">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Email
+        <input type="email" name="email" required autocomplete="email">
+      </label>
+      <button class="btn btn-big" type="submit">Send the link</button>
+      <p class="tiny muted"><a href="/login">Back to sign in</a></p>
+    </form>
+  {% endif %}
+</main>
+{% endblock %}

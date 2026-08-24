@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Choose a new password · {{ site_name }}{% endblock %}
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">Your account</p>
+  <h1>Choose a new password</h1>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  <form class="card form" method="post" action="/reset/{{ token }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>New password
+      <input type="password" name="password" required autocomplete="new-password">
+      <span class="hint">At least 10 characters.</span>
+    </label>
+    <label>Confirm password
+      <input type="password" name="confirm" required autocomplete="new-password">
+    </label>
+    <button class="btn btn-big" type="submit">Save and sign in</button>
+    <p class="tiny muted">Saving this signs out every other device.</p>
+  </form>
+</main>
+{% endblock %}

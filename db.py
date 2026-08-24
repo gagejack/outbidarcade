@@ -454,7 +454,7 @@ def delete_listing(listing_id: int) -> None:
 def pending_bids() -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
-            "SELECT b.*, l.title, l.url, l.email, l.manage_token,"
+            "SELECT b.*, l.title, l.url, l.email,"
             " COALESCE((SELECT SUM(amount) FROM bids x WHERE x.listing_id=l.id"
             "   AND x.status='confirmed'), 0) AS confirmed_total"
             " FROM bids b JOIN listings l ON l.id=b.listing_id"
