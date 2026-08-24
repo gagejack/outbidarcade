@@ -78,6 +78,15 @@ TODO
     Cloudflare caches static assets at the edge, but dynamic requests
     still come off the house connection.
 
+[ ] Auto-refresh the leaderboard for viewers currently on the page, so
+    a new #1 shows up without a manual reload. Not fully decided yet:
+      - trigger: could be time-based polling, or a dollar/bid threshold
+      - delivery: live in-place update (like a ticker) vs. full page
+        reload
+    Whichever trigger is picked, wire it off the existing
+    _invalidate_board() call in db.py so there is one source of truth
+    for "the board changed," not a second poller re-deriving it.
+
 
 COMMON COMMANDS
 ===============
