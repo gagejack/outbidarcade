@@ -17,6 +17,7 @@ from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "app.db"
+UPLOADS_DIR = DATA_DIR / "uploads"
 
 MIN_FIRST_BID = 2
 MIN_TOP_UP = 1
@@ -41,6 +42,7 @@ def connect():
 
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.executescript(
             """
@@ -173,6 +175,45 @@ def drop_session(token: str | None) -> None:
         return
     with connect() as conn:
         conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+
+
+# -------------------------------------------------------------- uploads
+
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+# Signature bytes for the formats submit.html's <input accept> offers. Sniffed
+# from content, not trusted from the client's filename or Content-Type header.
+_IMAGE_SIGNATURES: dict[str, tuple[bytes, ...]] = {
+    "png": (b"\x89PNG\r\n\x1a\n",),
+    "jpg": (b"\xff\xd8\xff",),
+    "webp": (b"RIFF",),  # also needs b"WEBP" at offset 8, checked separately
+}
+
+
+def sniff_image_ext(data: bytes) -> str | None:
+    if data.startswith(_IMAGE_SIGNATURES["png"][0]):
+        return "png"
+    if data.startswith(_IMAGE_SIGNATURES["jpg"][0]):
+        return "jpg"
+    if data.startswith(_IMAGE_SIGNATURES["webp"][0]) and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def save_upload(data: bytes) -> str | None:
+    """Sniff, size-check, and write an uploaded cover image under /data.
+
+    Returns the public path (/static/uploads/<name>) or None if data is
+    empty or not a recognized image. Never trusts the caller's filename.
+    """
+    if not data or len(data) > MAX_UPLOAD_BYTES:
+        return None
+    ext = sniff_image_ext(data)
+    if ext is None:
+        return None
+    name = f"{secrets.token_hex(16)}.{ext}"
+    (UPLOADS_DIR / name).write_bytes(data)
+    return f"/uploads/{name}"
 
 
 # ---------------------------------------------------------------- listings

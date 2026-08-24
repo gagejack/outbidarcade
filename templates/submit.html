@@ -17,7 +17,7 @@
 
   {% if error %}<p class="alert">{{ error }}</p>{% endif %}
 
-  <form class="card form" method="post" action="/submit">
+  <form class="card form" method="post" action="/submit" enctype="multipart/form-data">
     <label>Game name
       <input name="title" maxlength="70" required value="{{ form.title or '' }}" placeholder="Cursed Delve">
     </label>
@@ -31,6 +31,10 @@
     <label>Cover image URL <span class="opt">optional</span>
       <input name="image_url" value="{{ form.image_url or '' }}" placeholder="https://.../capsule.jpg">
       <span class="hint">A wide capsule or key art looks best. Leave blank for a plain tile.</span>
+    </label>
+    <label>...or upload a cover image <span class="opt">optional</span>
+      <input name="image_file" type="file" accept="image/png,image/jpeg,image/webp">
+      <span class="hint">PNG, JPEG, or WebP, up to 5MB. Using this instead of a URL? Leave the URL field above blank.</span>
     </label>
     <div class="form-row">
       <label>Studio or dev <span class="opt">optional</span>

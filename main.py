@@ -37,6 +37,8 @@ async def lifespan(app: FastAPI):  # noqa: ANN201 - FastAPI lifespan signature
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+db.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=db.UPLOADS_DIR), name="uploads")
 templates = Jinja2Templates(directory="templates")
 
 
@@ -218,6 +220,16 @@ async def submit(request: Request):
         return fail("A working link to the game is required (Steam, itch.io, your own site).")
     form["url"] = link
     form["image_url"] = clean_url(form["image_url"])
+
+    upload = raw.get("image_file")
+    if upload is not None and getattr(upload, "filename", ""):
+        content = await upload.read()
+        saved = db.save_upload(content)
+        if content and saved is None:
+            return fail("Cover image must be a PNG, JPEG, or WebP under 5MB.")
+        if saved:
+            form["image_url"] = saved
+
     value, err = parse_amount(form["amount"], db.MIN_FIRST_BID)
     if err:
         return fail(err)
