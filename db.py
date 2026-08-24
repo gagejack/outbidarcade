@@ -305,12 +305,6 @@ def get_listing(listing_id: int) -> dict | None:
     return item
 
 
-def get_listing_by_token(token: str) -> dict | None:
-    with connect() as conn:
-        row = conn.execute("SELECT id FROM listings WHERE manage_token=?", (token,)).fetchone()
-    return get_listing(row["id"]) if row else None
-
-
 def bids_for(listing_id: int) -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
@@ -319,13 +313,12 @@ def bids_for(listing_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def create_listing(data: dict, amount: int) -> dict:
+def create_listing(data: dict, amount: int, user_id: int) -> dict:
     now = int(time.time())
-    token = secrets.token_urlsafe(24)
     with connect() as conn:
         cur = conn.execute(
             "INSERT INTO listings(slug, title, tagline, url, image_url, studio, platforms,"
-            " email, manage_token, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            " email, user_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (
                 slugify(data["title"]),
                 data["title"],
@@ -335,7 +328,7 @@ def create_listing(data: dict, amount: int) -> dict:
                 data.get("studio", ""),
                 data.get("platforms", ""),
                 data.get("email", ""),
-                token,
+                user_id,
                 now,
             ),
         )
@@ -344,7 +337,56 @@ def create_listing(data: dict, amount: int) -> dict:
             "INSERT INTO bids(listing_id, amount, status, created_at) VALUES(?,?,'pending',?)",
             (listing_id, amount, now),
         )
-    return {"id": listing_id, "token": token}
+    return {"id": listing_id}
+
+
+def owns_listing(user_id: int, listing_id: int) -> bool:
+    if not user_id or not listing_id:
+        return False
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM listings WHERE id=? AND user_id=?", (listing_id, user_id)
+        ).fetchone()
+    return row is not None
+
+
+def listings_for_user(user_id: int) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT l.*, COALESCE(SUM(CASE WHEN b.status='confirmed' THEN b.amount END), 0)"
+            " AS total, COUNT(CASE WHEN b.status='pending' THEN 1 END) AS pending_count"
+            " FROM listings l LEFT JOIN bids b ON b.listing_id=l.id"
+            " WHERE l.user_id=? GROUP BY l.id ORDER BY l.id DESC",
+            (user_id,),
+        ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["platform_list"] = [p for p in item["platforms"].split(",") if p]
+        out.append(item)
+    return out
+
+
+def update_listing(listing_id: int, data: dict) -> None:
+    """Editable fields only. Money and status are never touched here."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE listings SET slug=?, title=?, tagline=?, url=?, image_url=?,"
+            " studio=?, platforms=? WHERE id=?",
+            (
+                slugify(data["title"]),
+                data["title"],
+                data["tagline"],
+                data["url"],
+                data.get("image_url", ""),
+                data.get("studio", ""),
+                data.get("platforms", ""),
+                listing_id,
+            ),
+        )
+    # Every field above is rendered on the board, so the cache is now stale.
+    # Same contract as set_hidden/delete_listing.
+    _invalidate_board()
 
 
 def add_bid(listing_id: int, amount: int) -> int:
