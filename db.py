@@ -188,23 +188,30 @@ SESSION_TTL = 60 * 60 * 24 * 30
 
 
 def new_session() -> str:
+    """An operator session. User sessions are auth.start_session()."""
     token = secrets.token_urlsafe(32)
     now = int(time.time())
     with connect() as conn:
         # Expired sessions are swept here rather than on every page view, which
         # would put a write on read-only traffic.
         conn.execute("DELETE FROM sessions WHERE created_at < ?", (now - SESSION_TTL,))
-        conn.execute("INSERT INTO sessions(token, created_at) VALUES(?, ?)", (token, now))
+        conn.execute(
+            "INSERT INTO sessions(token, user_id, created_at) VALUES(?, NULL, ?)",
+            (token, now),
+        )
     return token
 
 
 def session_valid(token: str | None) -> bool:
+    """True only for operator sessions - user_id IS NULL."""
     if not token:
         return False
     cutoff = int(time.time()) - SESSION_TTL
     with connect() as conn:
         row = conn.execute(
-            "SELECT token FROM sessions WHERE token=? AND created_at >= ?", (token, cutoff)
+            "SELECT token FROM sessions WHERE token=? AND user_id IS NULL"
+            " AND created_at >= ?",
+            (token, cutoff),
         ).fetchone()
     return row is not None
 
