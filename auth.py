@@ -159,3 +159,71 @@ def csrf_ok(cookie_value: str | None, form_value: str | None) -> bool:
     if not cookie_value or not form_value:
         return False
     return secrets.compare_digest(cookie_value, form_value)
+
+
+UNVERIFIED = (
+    "That provider did not confirm your email address is verified. "
+    "Sign in with a password first, then link the provider from your account page."
+)
+
+
+def _link_identity(user_id: int, provider: str, uid: str) -> None:
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO identities(user_id, provider, provider_uid, created_at)"
+            " VALUES(?,?,?,?)",
+            (user_id, provider, uid, int(time.time())),
+        )
+
+
+def identities_for(user_id: int) -> list[str]:
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT provider FROM identities WHERE user_id=? ORDER BY provider",
+            (user_id,),
+        ).fetchall()
+    return [r["provider"] for r in rows]
+
+
+def user_from_profile(profile: dict) -> tuple[dict | None, str]:
+    """Find or create the account behind an OAuth profile.
+
+    Linking by email is only ever done when the provider says the address is
+    verified. Auto-linking an unverified address is an account-takeover path:
+    register the victim's address at a sloppy provider and inherit the account.
+    """
+    provider = profile.get("provider", "")
+    uid = str(profile.get("uid", ""))
+    email = (profile.get("email") or "").strip()
+
+    if not provider or not uid:
+        return None, "That sign-in did not complete. Try again."
+
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM identities WHERE provider=? AND provider_uid=?",
+            (provider, uid),
+        ).fetchone()
+    if row:
+        found = get_user(int(row["user_id"]))
+        if found:
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE users SET last_login_at=? WHERE id=?",
+                    (int(time.time()), found["id"]),
+                )
+            return found, ""
+
+    if not email:
+        return None, "That provider did not share an email address."
+    if not profile.get("email_verified"):
+        return None, UNVERIFIED
+
+    existing = get_user_by_email(email)
+    if existing:
+        _link_identity(existing["id"], provider, uid)
+        return existing, ""
+
+    user_id = create_user(email, "", profile.get("name", ""))
+    _link_identity(user_id, provider, uid)
+    return get_user(user_id), ""
