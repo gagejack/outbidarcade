@@ -245,6 +245,8 @@ async def submit(request: Request):
             request, "submit.html", {"stats": db.stats(), "form": form, "error": msg}, status=400
         )
 
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return fail("That form expired. Try again.")
     if field("website"):  # honeypot
         return fail("Something went wrong. Try again.")
     if rate_limited(request, "submit", 5, 3600):
@@ -262,59 +264,48 @@ async def submit(request: Request):
     if err:
         return fail(err)
 
-    created = db.create_listing(form, value)
+    user = current_user(request)
+    if not user:
+        # Park the validated form so nothing is retyped after signing in.
+        # A DB row rather than a cookie: SameSite=Lax cookies are not reliably
+        # returned on an OAuth callback, and this payload can exceed 4KB.
+        draft_id = auth.save_draft(form)
+        resp = RedirectResponse("/login", status_code=303)
+        resp.set_cookie(DRAFT_COOKIE, draft_id, httponly=True, samesite="lax",
+                        secure=secure_cookies(), max_age=3600)
+        return resp
+
+    return listing_from_form(form, value, user["id"])
+
+
+def listing_from_form(form: dict, amount: int, user_id: int):
+    created = db.create_listing(form, amount, user_id)
     if db.get_setting("auto_confirm") == "1":
         pending = db.bids_for(created["id"])
         if pending:
             db.confirm_bid(pending[0]["id"])
-    return RedirectResponse(f"/listing/{created['token']}", status_code=303)
+    return RedirectResponse(f"/listing/{created['id']}", status_code=303)
 
 
-@app.get("/listing/{token}", response_class=HTMLResponse)
-def manage(request: Request, token: str):
-    listing = db.get_listing_by_token(token)
-    if not listing:
-        return render(request, "notfound.html", {}, status=404)
-    return render(
-        request,
-        "manage.html",
-        {
-            "listing": listing,
-            "bids": db.bids_for(listing["id"]),
-            "stats": db.stats(),
-            "payment_link": db.get_setting("payment_link"),
-            "payment_note": db.get_setting("payment_note"),
-            "error": None,
-        },
-    )
-
-
-@app.post("/listing/{token}/topup", response_class=HTMLResponse)
-def topup(request: Request, token: str, amount: str = Form("")):
-    listing = db.get_listing_by_token(token)
-    if not listing:
-        return render(request, "notfound.html", {}, status=404)
-    value, err = parse_amount(amount, db.MIN_TOP_UP)
-    if not err and rate_limited(request, "topup", 10, 3600):
-        err = "Slow down a moment, then try again."
+@app.get("/submit/resume")
+def submit_resume(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    draft = auth.load_draft(request.cookies.get(DRAFT_COOKIE))
+    if not draft:
+        resp = RedirectResponse("/submit", status_code=303)
+        resp.delete_cookie(DRAFT_COOKIE)
+        return resp
+    value, err = parse_amount(draft.get("amount", ""), db.MIN_FIRST_BID)
     if err:
-        return render(
-            request,
-            "manage.html",
-            {
-                "listing": listing,
-                "bids": db.bids_for(listing["id"]),
-                "stats": db.stats(),
-                "payment_link": db.get_setting("payment_link"),
-                "payment_note": db.get_setting("payment_note"),
-                "error": err,
-            },
-            status=400,
-        )
-    bid_id = db.add_bid(listing["id"], value)
-    if db.get_setting("auto_confirm") == "1":
-        db.confirm_bid(bid_id)
-    return RedirectResponse(f"/listing/{token}#bids", status_code=303)
+        resp = RedirectResponse("/submit", status_code=303)
+        resp.delete_cookie(DRAFT_COOKIE)
+        return resp
+    auth.delete_draft(request.cookies.get(DRAFT_COOKIE))
+    resp = listing_from_form(draft, value, user["id"])
+    resp.delete_cookie(DRAFT_COOKIE)
+    return resp
 
 
 @app.get("/game/{listing_id}", response_class=HTMLResponse)
