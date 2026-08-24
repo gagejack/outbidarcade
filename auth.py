@@ -282,3 +282,24 @@ def delete_draft(draft_id: str | None) -> None:
         return
     with db.connect() as conn:
         conn.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
+
+
+def claim_draft(draft_id: str | None) -> dict | None:
+    """Atomically take a draft: return its payload only to the caller whose
+    DELETE actually removed the row, so concurrent requests cannot both act
+    on one draft. Returns None for a missing, expired or already-claimed id.
+    """
+    if not draft_id:
+        return None
+    cutoff = int(time.time()) - DRAFT_TTL
+    with db.connect() as conn:
+        row = conn.execute(
+            "DELETE FROM drafts WHERE id=? AND created_at >= ? RETURNING payload",
+            (draft_id, cutoff),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["payload"])
+    except ValueError:
+        return None

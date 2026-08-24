@@ -117,3 +117,12 @@ def test_signed_in_submit_creates_the_listing_directly(client, database):
     assert resp.status_code == 303
     assert "/listing/" in resp.headers["location"]
     assert len(database.all_listings()) == 1
+
+
+def test_double_resume_creates_only_one_listing(client, database):
+    submit(client)
+    register(client)
+    client.get("/submit/resume", follow_redirects=False)
+    client.get("/submit/resume", follow_redirects=False)
+    assert len(database.all_listings()) == 1
+    assert len(database.bids_for(database.all_listings()[0]["id"])) == 1

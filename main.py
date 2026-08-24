@@ -292,7 +292,9 @@ def submit_resume(request: Request):
     user = current_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    draft = auth.load_draft(request.cookies.get(DRAFT_COOKIE))
+    # Claiming deletes the row and hands back the payload in one statement, so
+    # a double-click cannot turn one parked form into two listings.
+    draft = auth.claim_draft(request.cookies.get(DRAFT_COOKIE))
     if not draft:
         resp = RedirectResponse("/submit", status_code=303)
         resp.delete_cookie(DRAFT_COOKIE)
@@ -302,7 +304,6 @@ def submit_resume(request: Request):
         resp = RedirectResponse("/submit", status_code=303)
         resp.delete_cookie(DRAFT_COOKIE)
         return resp
-    auth.delete_draft(request.cookies.get(DRAFT_COOKIE))
     resp = listing_from_form(draft, value, user["id"])
     resp.delete_cookie(DRAFT_COOKIE)
     return resp
