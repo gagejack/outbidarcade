@@ -165,3 +165,57 @@ def test_account_page_shows_the_email(client):
 def test_account_requires_sign_in(client):
     resp = client.get("/account", follow_redirects=False)
     assert resp.status_code == 303
+
+
+def test_linking_attaches_to_the_existing_account(client, app_modules):
+    """The bug this fixes: linking used to create a second account when the
+    provider's email differed from the registered one."""
+    import auth
+    main, _ = app_modules
+    register(client, "dev@studio.com")
+    user = auth.get_user_by_email("dev@studio.com")
+
+    profile = {"provider": "google", "uid": "g-1",
+               "email": "dev@work-example.com",  # deliberately different
+               "email_verified": True, "name": "Dev"}
+    ok, error = auth.link_provider_to_user(user["id"], profile)
+    assert ok and error == ""
+    assert auth.identities_for(user["id"]) == ["google"]
+    assert auth.get_user_by_email("dev@work-example.com") is None, (
+        "linking must not create a second account"
+    )
+
+
+def test_linking_is_idempotent(client, app_modules):
+    import auth
+    register(client, "dev@studio.com")
+    user = auth.get_user_by_email("dev@studio.com")
+    profile = {"provider": "google", "uid": "g-1", "email": "dev@studio.com",
+               "email_verified": True, "name": "Dev"}
+    assert auth.link_provider_to_user(user["id"], profile)[0] is True
+    assert auth.link_provider_to_user(user["id"], profile)[0] is True
+    assert auth.identities_for(user["id"]) == ["google"]
+
+
+def test_linking_refuses_an_identity_owned_by_someone_else(client, app_modules):
+    import auth
+    first = auth.create_user("first@studio.com", "correct horse battery")
+    second = auth.create_user("second@studio.com", "correct horse battery")
+    profile = {"provider": "google", "uid": "g-1", "email": "first@studio.com",
+               "email_verified": True, "name": "First"}
+    assert auth.link_provider_to_user(first, profile)[0] is True
+    ok, error = auth.link_provider_to_user(second, profile)
+    assert ok is False
+    assert "already linked" in error
+    assert auth.identities_for(second) == []
+
+
+def test_linking_does_not_require_a_verified_email(client, app_modules):
+    """The session proves identity, so the takeover risk that forces
+    verification in user_from_profile does not apply here."""
+    import auth
+    user = auth.create_user("dev@studio.com", "correct horse battery")
+    profile = {"provider": "github", "uid": "h-1", "email": "dev@studio.com",
+               "email_verified": False, "name": "Dev"}
+    assert auth.link_provider_to_user(user, profile)[0] is True
+    assert auth.identities_for(user) == ["github"]

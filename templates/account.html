@@ -4,6 +4,7 @@
 <main class="page narrow">
   <p class="kicker">Your account</p>
   <h1>Account</h1>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
 
   <div class="card">
     <h2>Email</h2>

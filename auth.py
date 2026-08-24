@@ -198,6 +198,34 @@ def identities_for(user_id: int) -> list[str]:
     return [r["provider"] for r in rows]
 
 
+def link_provider_to_user(user_id: int, profile: dict) -> tuple[bool, str]:
+    """Attach an OAuth identity to an account the visitor is already signed
+    into. Unlike user_from_profile this never creates or switches accounts,
+    and the email does not have to match: the session is the proof of who
+    they are, so an unverified provider email is no longer a takeover risk.
+    """
+    provider = profile.get("provider", "")
+    uid = str(profile.get("uid", ""))
+    if not provider or not uid:
+        return False, "That sign-in did not complete. Try again."
+
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM identities WHERE provider=? AND provider_uid=?",
+            (provider, uid),
+        ).fetchone()
+    if row and int(row["user_id"]) != user_id:
+        return False, (
+            f"That {provider.capitalize()} account is already linked to a "
+            "different Outbid Arcade account."
+        )
+    if row:
+        return True, ""  # already linked here; nothing to do
+
+    _link_identity(user_id, provider, uid)
+    return True, ""
+
+
 def user_from_profile(profile: dict) -> tuple[dict | None, str]:
     """Find or create the account behind an OAuth profile.
 

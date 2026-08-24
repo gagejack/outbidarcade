@@ -353,6 +353,7 @@ def account(request: Request):
         "_user": user,
         "linked": auth.identities_for(user["id"]),
         "stats": db.stats(),
+        "error": None,
     })
 
 
@@ -608,8 +609,11 @@ def oauth_start(request: Request, provider: str):
                       {"error": "Too many attempts. Try again later.", "email": ""},
                       status=429)
     state = secrets.token_urlsafe(24)
+    # A signed-in visitor is linking a provider to the account they already
+    # have, not signing in as whoever the provider says they are.
+    intent = "link" if current_user(request) else "signin"
     resp = RedirectResponse(oauth.authorize_url(provider, state), status_code=303)
-    resp.set_cookie(STATE_COOKIE, f"{provider}:{state}", httponly=True,
+    resp.set_cookie(STATE_COOKIE, f"{provider}:{intent}:{state}", httponly=True,
                     samesite="lax", secure=secure_cookies(), max_age=600)
     return resp
 
@@ -623,20 +627,39 @@ def oauth_callback(request: Request, provider: str, code: str = "", state: str =
         return render(request, "login.html", {"error": msg, "email": ""}, status=status)
 
     expected = request.cookies.get(STATE_COOKIE, "")
-    if not state or expected != f"{provider}:{state}":
+    if not state or expected not in (
+        f"{provider}:link:{state}",
+        f"{provider}:signin:{state}",
+    ):
         return fail("That sign-in could not be verified. Start again.")
+    linking = expected == f"{provider}:link:{state}"
     if not code:
         return fail("That sign-in did not complete. Try again.")
 
     profile = oauth.fetch_profile(provider, code)
     if not profile:
         return fail("That provider could not be reached. Try again.")
-    user, error = auth.user_from_profile(profile)
-    if not user:
+
+    user = current_user(request)
+    if linking and user:
+        ok, error = auth.link_provider_to_user(user["id"], profile)
+        if not ok:
+            return render(request, "account.html", {
+                "_user": user,
+                "linked": auth.identities_for(user["id"]),
+                "stats": db.stats(),
+                "error": error,
+            }, status=400)
+        resp = RedirectResponse("/account", status_code=303)
+        resp.delete_cookie(STATE_COOKIE)
+        return resp
+
+    found, error = auth.user_from_profile(profile)
+    if not found:
         return fail(error)
 
     resp = RedirectResponse(next_after_login(request), status_code=303)
-    set_session_cookie(resp, auth.start_session(user["id"]))
+    set_session_cookie(resp, auth.start_session(found["id"]))
     resp.delete_cookie(STATE_COOKIE)
     return resp
 
