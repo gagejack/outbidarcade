@@ -112,3 +112,40 @@ def end_session(token: str | None) -> None:
 def end_all_sessions(user_id: int) -> None:
     with db.connect() as conn:
         conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def issue_reset(user_id: int) -> str:
+    """Return the raw token. Only its hash is stored, so a database leak
+    yields no usable reset links."""
+    token = secrets.token_urlsafe(32)
+    now = int(time.time())
+    with db.connect() as conn:
+        conn.execute("DELETE FROM reset_tokens WHERE expires_at < ?", (now,))
+        conn.execute(
+            "INSERT INTO reset_tokens(token_hash, user_id, expires_at) VALUES(?,?,?)",
+            (_hash_token(token), user_id, now + RESET_TTL),
+        )
+    return token
+
+
+def consume_reset(token: str) -> int | None:
+    if not token:
+        return None
+    now = int(time.time())
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM reset_tokens WHERE token_hash=?"
+            " AND used_at IS NULL AND expires_at > ?",
+            (_hash_token(token), now),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "UPDATE reset_tokens SET used_at=? WHERE token_hash=?",
+            (now, _hash_token(token)),
+        )
+    return int(row["user_id"])
