@@ -3,3 +3,5 @@ uvicorn>=0.32
 jinja2>=3.1
 # FastAPI raises at import time on Form(...) without this — see /opt/templates/fastapi
 python-multipart>=0.0.9
+httpx>=0.27
+pytest>=8.0
