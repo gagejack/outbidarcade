@@ -1,0 +1,102 @@
+OUTBID ARCADE — STATUS AND TODO
+Last updated: 2026-08-23
+
+
+DONE
+====
+
+Server (Lenovo box, Ubuntu 26.04, hostname lenovoserver)
+  - Static IP 10.0.0.181 via netplan (/etc/netplan/00-installer-config.yaml)
+    Xfinity gateway has no usable DHCP reservation UI, so it is set OS-side.
+  - BIOS set to power on after power loss.
+  - SSH: ssh gagejack@10.0.0.181
+
+App
+  - Docker installed, user in docker group.
+  - Container: outbid-arcade, port 8080, --restart unless-stopped
+  - Persistent data: ~/outbid-data on host, mounted at /data in container.
+    This survives image rebuilds. Do not put state anywhere else.
+
+Tunnel / DNS
+  - cloudflared as systemd service (enabled, survives reboot)
+  - Tunnel ID: ccf90de1-e697-4b67-b0bd-5f0cc15ccfcd
+  - Config: /etc/cloudflared/config.yml -> localhost:8080
+  - Live at https://outbidarcade.lol
+
+Performance
+  - Board cached in memory, invalidated explicitly on confirm/reject/
+    hide/unhide/delete.
+  - Homepage went from 6 SQLite connections to 3 (2 for anonymous traffic).
+    /api/board went from 4 to 1. BOARD_SQL now runs once per board change
+    instead of 3x per pageview.
+  - Session expiry check moved into the SELECT; the sweep runs at login
+    instead of on every pageview.
+
+Social
+  - og:image at static/og-image.png (1200x630), plus twitter:card tags.
+
+
+IMPORTANT CONSTRAINT
+====================
+
+RUN ONE UVICORN WORKER. Do not add --workers.
+
+Two pieces of state live in process memory:
+  - the rate limiter (_HITS in main.py)
+  - the board cache (_board_cache in db.py)
+
+With N workers each process gets its own copy. Rate limits would multiply
+by N (a 10-per-15-min login limit becomes 10*N), and board caches would
+diverge after a write, so some visitors would see a stale board.
+
+Adding workers is also not the speedup it looks like: every route is
+sync def, so FastAPI already serves them from a threadpool. The real
+ceiling is SQLite, and more processes contending for one file makes that
+worse, not better.
+
+If more capacity is genuinely needed, the order is:
+  1. Move _HITS and the board cache to shared storage (or Postgres)
+  2. Only then add workers
+
+
+TODO
+====
+
+[ ] Post to Reddit. Check each sub's self-promo rules first; most remove
+    or ban on sight. Candidates: r/SideProject, r/InternetIsBeautiful,
+    r/webdev. Preview the link card at reddit.com/submit without posting.
+
+[ ] Back up ~/outbid-data. Right now the only copy of every listing and
+    bid is on one machine in the house. A nightly copy somewhere off the
+    box would be cheap insurance.
+
+[ ] Consider Postgres only if write volume actually grows (accounts,
+    lots of concurrent bidding). Not before — SQLite in WAL mode handles
+    thousands of reads/sec at the current query count.
+
+[ ] Home upload bandwidth is the real traffic ceiling, not the app.
+    Cloudflare caches static assets at the edge, but dynamic requests
+    still come off the house connection.
+
+
+COMMON COMMANDS
+===============
+
+Redeploy after a git push:
+  cd ~/outbidarcade
+  git pull
+  docker build -t outbid-arcade .
+  docker stop outbid-arcade
+  docker rm outbid-arcade
+  docker run -d --name outbid-arcade -p 8080:8080 \
+    -v ~/outbid-data:/data --restart unless-stopped outbid-arcade
+
+Check things:
+  docker ps
+  curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080
+  curl -s http://localhost:8080/api/board
+  sudo systemctl status cloudflared     # q to exit the pager
+
+Logs:
+  docker logs outbid-arcade --tail 50
+  sudo journalctl -u cloudflared -n 50 --no-pager
