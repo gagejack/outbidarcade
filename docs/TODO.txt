@@ -78,14 +78,20 @@ TODO
     Cloudflare caches static assets at the edge, but dynamic requests
     still come off the house connection.
 
-[ ] Auto-refresh the leaderboard for viewers currently on the page, so
-    a new #1 shows up without a manual reload. Not fully decided yet:
-      - trigger: could be time-based polling, or a dollar/bid threshold
-      - delivery: live in-place update (like a ticker) vs. full page
-        reload
-    Whichever trigger is picked, wire it off the existing
-    _invalidate_board() call in db.py so there is one source of truth
-    for "the board changed," not a second poller re-deriving it.
+[ ] "Seasons": full board reset once a threshold is hit. Everything on
+    the current board clears, but it's archived (not deleted) so old
+    boards stay viewable, then a fresh board starts at $0.
+    Not decided yet:
+      - trigger: time-based (every month?), a volume/bid threshold, or
+        admin-triggered from the panel
+      - where old boards live: a season_id/archived flag on listings,
+        or a snapshot table taken at reset time
+      - what a past-season page shows: read-only board, exact copy of
+        the old /, something simpler
+    This is a bigger change than most items here — new table shape,
+    new routes to browse past seasons, and it interacts with the board
+    cache in db.py (a season boundary is itself a board-changing event,
+    same as confirm/hide/delete, so it needs to invalidate too).
 
 
 COMMON COMMANDS
