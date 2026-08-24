@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Account · {{ site_name }}{% endblock %}
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">Your account</p>
+  <h1>Account</h1>
+
+  <div class="card">
+    <h2>Email</h2>
+    <p class="mono">{{ user.email }}</p>
+  </div>
+
+  <div class="card">
+    <h2>Sign-in methods</h2>
+    <ul class="plain">
+      <li>Password — {% if user.password_hash %}set{% else %}
+        not set. <a href="/forgot">Set one</a> so you can sign in without a provider.{% endif %}</li>
+      {% for p in ['google', 'github'] %}
+        {% if p in linked %}
+        <li>{{ p | capitalize }} — linked</li>
+        {% elif p in providers %}
+        <li>{{ p | capitalize }} — <a href="/auth/{{ p }}">link it</a></li>
+        {% endif %}
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Password</h2>
+    <p class="muted small">Changing your password signs out every other device.</p>
+    <a class="btn" href="/forgot">Send me a reset link</a>
+  </div>
+
+  <p class="tiny muted"><a href="/dashboard">Back to my games</a></p>
+</main>
+{% endblock %}

@@ -316,15 +316,148 @@ def game(request: Request, listing_id: int):
     return render(request, "game.html", {"listing": listing, "stats": db.stats()})
 
 
+# --------------------------------------------------------------- user pages
+
+
+def owned_listing_or_none(request: Request, listing_id: int):
+    """Return the listing only if the signed-in user owns it.
+
+    A non-owner is given the same 404 as a missing listing, so the route
+    never confirms that a listing exists.
+    """
+    user = current_user(request)
+    if not user or not db.owns_listing(user["id"], listing_id):
+        return None, user
+    return db.get_listing(listing_id), user
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    return render(request, "dashboard.html", {
+        "_user": user,
+        "listings": db.listings_for_user(user["id"]),
+        "stats": db.stats(),
+    })
+
+
+@app.get("/account", response_class=HTMLResponse)
+def account(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    return render(request, "account.html", {
+        "_user": user,
+        "linked": auth.identities_for(user["id"]),
+        "stats": db.stats(),
+    })
+
+
+@app.get("/listing/{listing_id}", response_class=HTMLResponse)
+def manage(request: Request, listing_id: int):
+    listing, _ = owned_listing_or_none(request, listing_id)
+    if not listing:
+        return render(request, "notfound.html", {}, status=404)
+    return render(request, "manage.html", {
+        "listing": listing,
+        "bids": db.bids_for(listing_id),
+        "stats": db.stats(),
+        "payment_link": db.get_setting("payment_link"),
+        "payment_note": db.get_setting("payment_note"),
+        "error": None,
+    })
+
+
+@app.get("/listing/{listing_id}/edit", response_class=HTMLResponse)
+def edit_form(request: Request, listing_id: int):
+    listing, _ = owned_listing_or_none(request, listing_id)
+    if not listing:
+        return render(request, "notfound.html", {}, status=404)
+    return render(request, "edit.html", {
+        "listing": listing, "form": listing, "stats": db.stats(), "error": None,
+    })
+
+
+@app.post("/listing/{listing_id}/edit", response_class=HTMLResponse)
+async def edit(request: Request, listing_id: int):
+    listing, _ = owned_listing_or_none(request, listing_id)
+    if not listing:
+        return render(request, "notfound.html", {}, status=404)
+    raw = await request.form()
+
+    def field(name: str, limit: int = 200) -> str:
+        return str(raw.get(name, "")).strip()[:limit]
+
+    form = {
+        "title": field("title", 70),
+        "tagline": field("tagline", 140),
+        "url": field("url", 400),
+        "image_url": field("image_url", 400),
+        "studio": field("studio", 60),
+        "platforms": ",".join(
+            [p for p in raw.getlist("platforms") if p in PLATFORMS][:4]
+        ),
+    }
+
+    def fail(msg: str):
+        merged = dict(listing)
+        merged.update(form)
+        merged["platform_list"] = [p for p in form["platforms"].split(",") if p]
+        return render(request, "edit.html", {
+            "listing": listing, "form": merged, "stats": db.stats(), "error": msg,
+        }, status=400)
+
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return fail("That form expired. Try again.")
+    if len(form["title"]) < 2:
+        return fail("Your game needs a name.")
+    if len(form["tagline"]) < 8:
+        return fail("Add a one-line pitch, at least a few words.")
+    link = clean_url(form["url"])
+    if not link:
+        return fail("A working link to the game is required.")
+    form["url"] = link
+    form["image_url"] = clean_url(form["image_url"])
+
+    db.update_listing(listing_id, form)
+    return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+
+
+@app.post("/listing/{listing_id}/topup", response_class=HTMLResponse)
+async def topup(request: Request, listing_id: int):
+    listing, _ = owned_listing_or_none(request, listing_id)
+    if not listing:
+        return render(request, "notfound.html", {}, status=404)
+    raw = await request.form()
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "notfound.html", {}, status=404)
+    value, err = parse_amount(str(raw.get("amount", "")), db.MIN_TOP_UP)
+    if not err and rate_limited(request, "topup", 10, 3600):
+        err = "Slow down a moment, then try again."
+    if err:
+        return render(request, "manage.html", {
+            "listing": listing,
+            "bids": db.bids_for(listing_id),
+            "stats": db.stats(),
+            "payment_link": db.get_setting("payment_link"),
+            "payment_note": db.get_setting("payment_note"),
+            "error": err,
+        }, status=400)
+    bid_id = db.add_bid(listing_id, value)
+    if db.get_setting("auto_confirm") == "1":
+        db.confirm_bid(bid_id)
+    return RedirectResponse(f"/listing/{listing_id}#bids", status_code=303)
+
+
 # --------------------------------------------------------------------- auth
 
 
 @app.get("/register", response_class=HTMLResponse)
 def register_form(request: Request):
     if current_user(request):
-        # /dashboard lands in Task 14; until then send a signed-in visitor
-        # who wanders back to /register somewhere that always exists.
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse("/dashboard", status_code=303)
     return render(request, "register.html", {"error": None, "form": {}})
 
 
@@ -370,9 +503,7 @@ def next_after_login(request: Request) -> str:
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
     if current_user(request):
-        # Same reasoning as register_form: /dashboard doesn't exist until
-        # Task 14, so send an already-signed-in visitor to the board instead.
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse("/dashboard", status_code=303)
     return render(request, "login.html", {"error": None, "email": ""})
 
 

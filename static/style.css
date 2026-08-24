@@ -298,3 +298,9 @@ input:focus, textarea:focus { outline: 2px solid rgba(77, 240, 255, .5); outline
 .inline-logout { display: inline; }
 .linkish { background: none; border: 0; padding: 0; font: inherit;
            color: inherit; cursor: pointer; text-decoration: underline; }
+
+.dash-list { display: grid; gap: 1rem; }
+.dash-row { display: flex; justify-content: space-between; align-items: center;
+            gap: 1rem; flex-wrap: wrap; }
+.dash-actions { display: flex; gap: .5rem; }
+ul.plain { list-style: none; padding: 0; display: grid; gap: .4rem; }
