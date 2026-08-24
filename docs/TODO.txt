@@ -93,6 +93,28 @@ TODO
     cache in db.py (a season boundary is itself a board-changing event,
     same as confirm/hide/delete, so it needs to invalidate too).
 
+[ ] Voting + weekly kickbacks. Viewers can upvote listed games; at the
+    end of each week, the top 3 by vote count get a kickback funded by
+    a cut of that week's bid revenue.
+    This one involves real money going OUT to game devs, which is a
+    different scope than the rest of this file (that's all been about
+    money coming in). Needs settled before any of it gets built:
+      - how a payout actually reaches someone — the app has no payment
+        rail today, "pay" here just means the operator manually
+        confirms a bid was received (see db.py confirm_bid). Sending
+        money out is a new capability, not a flip of the same switch.
+      - what stops one person/bot from upvoting a game over and over —
+        no accounts exist yet, so votes need their own abuse guard
+        (IP-based like the bid rate limiter, or wait for real accounts)
+      - what % of revenue funds the pool, and whether it's the whole
+        site's weekly volume or per-listing
+      - tie handling for 3rd place
+      - whether voting is public (can see who upvoted) or anonymous
+    Smaller and more scoped as a first step: build the upvote counter
+    and weekly top-3 display without wiring up actual payouts yet —
+    that alone is useful and doesn't require solving the money-out
+    problem first.
+
 
 COMMON COMMANDS
 ===============
