@@ -144,7 +144,7 @@ def index(request: Request):
         "index.html",
         {
             "rows": rows,
-            "stats": db.stats(),
+            "stats": db.stats(rows),
             "events": db.recent_events(6),
         },
     )
@@ -152,6 +152,7 @@ def index(request: Request):
 
 @app.get("/api/board")
 def api_board():
+    board = db.board()
     rows = [
         {
             "rank": r["rank"],
@@ -160,9 +161,9 @@ def api_board():
             "total": r["total"],
             "url": r["url"],
         }
-        for r in db.board()
+        for r in board
     ]
-    return JSONResponse({"board": rows, "stats": db.stats()})
+    return JSONResponse({"board": rows, "stats": db.stats(board)})
 
 
 @app.get("/rules", response_class=HTMLResponse)

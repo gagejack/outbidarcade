@@ -143,22 +143,28 @@ def admin_exists() -> bool:
     return bool(get_setting("admin_hash"))
 
 
+SESSION_TTL = 60 * 60 * 24 * 30
+
+
 def new_session() -> str:
     token = secrets.token_urlsafe(32)
+    now = int(time.time())
     with connect() as conn:
-        conn.execute(
-            "INSERT INTO sessions(token, created_at) VALUES(?, ?)", (token, int(time.time()))
-        )
+        # Expired sessions are swept here rather than on every page view, which
+        # would put a write on read-only traffic.
+        conn.execute("DELETE FROM sessions WHERE created_at < ?", (now - SESSION_TTL,))
+        conn.execute("INSERT INTO sessions(token, created_at) VALUES(?, ?)", (token, now))
     return token
 
 
 def session_valid(token: str | None) -> bool:
     if not token:
         return False
-    cutoff = int(time.time()) - 60 * 60 * 24 * 30
+    cutoff = int(time.time()) - SESSION_TTL
     with connect() as conn:
-        conn.execute("DELETE FROM sessions WHERE created_at < ?", (cutoff,))
-        row = conn.execute("SELECT token FROM sessions WHERE token=?", (token,)).fetchone()
+        row = conn.execute(
+            "SELECT token FROM sessions WHERE token=? AND created_at >= ?", (token, cutoff)
+        ).fetchone()
     return row is not None
 
 
@@ -177,6 +183,17 @@ def slugify(value: str) -> str:
     return slug[:48] or "game"
 
 
+# The board is read on nearly every request and only changes when a bid is
+# confirmed or a listing is hidden/deleted, so it is cached in memory and
+# dropped explicitly by those writes. Single process, so no locking.
+_board_cache: list[dict] | None = None
+
+
+def _invalidate_board() -> None:
+    global _board_cache
+    _board_cache = None
+
+
 BOARD_SQL = """
     SELECT l.*,
            COALESCE(SUM(CASE WHEN b.status='confirmed' THEN b.amount END), 0) AS total,
@@ -192,6 +209,9 @@ BOARD_SQL = """
 
 
 def board() -> list[dict]:
+    global _board_cache
+    if _board_cache is not None:
+        return _board_cache
     with connect() as conn:
         rows = conn.execute(BOARD_SQL).fetchall()
     out = []
@@ -200,16 +220,17 @@ def board() -> list[dict]:
         item["rank"] = i
         item["platform_list"] = [p for p in item["platforms"].split(",") if p]
         out.append(item)
+    _board_cache = out
     return out
 
 
-def top_total() -> int:
-    rows = board()
+def top_total(rows: list[dict] | None = None) -> int:
+    rows = board() if rows is None else rows
     return rows[0]["total"] if rows else 0
 
 
-def price_to_lead() -> int:
-    top = top_total()
+def price_to_lead(rows: list[dict] | None = None) -> int:
+    top = top_total(rows)
     return top + 1 if top else MIN_FIRST_BID
 
 
@@ -302,6 +323,9 @@ def confirm_bid(bid_id: int) -> None:
         ).fetchone()
         if listing and listing["live_at"] is None:
             conn.execute("UPDATE listings SET live_at=? WHERE id=?", (now, listing["id"]))
+    # Before get_listing below: it reads the board to work out the new rank,
+    # and that rank goes into the event text.
+    _invalidate_board()
     listing_data = get_listing(row["listing_id"])
     if listing_data:
         rank = listing_data.get("rank")
@@ -319,11 +343,14 @@ def confirm_bid(bid_id: int) -> None:
 def reject_bid(bid_id: int) -> None:
     with connect() as conn:
         conn.execute("UPDATE bids SET status='rejected' WHERE id=?", (bid_id,))
+    # A confirmed bid can be rejected back off the board, so drop the cache.
+    _invalidate_board()
 
 
 def set_hidden(listing_id: int, hidden: bool) -> None:
     with connect() as conn:
         conn.execute("UPDATE listings SET hidden=? WHERE id=?", (1 if hidden else 0, listing_id))
+    _invalidate_board()
 
 
 def delete_listing(listing_id: int) -> None:
@@ -331,6 +358,7 @@ def delete_listing(listing_id: int) -> None:
         conn.execute("DELETE FROM bids WHERE listing_id=?", (listing_id,))
         conn.execute("DELETE FROM events WHERE listing_id=?", (listing_id,))
         conn.execute("DELETE FROM listings WHERE id=?", (listing_id,))
+    _invalidate_board()
 
 
 def pending_bids() -> list[dict]:
@@ -377,15 +405,16 @@ def recent_events(limit: int = 8) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def stats() -> dict:
-    rows = board()
+def stats(rows: list[dict] | None = None) -> dict:
+    rows = board() if rows is None else rows
     with connect() as conn:
         volume = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) AS v FROM bids WHERE status='confirmed'"
         ).fetchone()["v"]
+    top = rows[0]["total"] if rows else 0
     return {
         "listings": len(rows),
         "volume": int(volume),
-        "top": rows[0]["total"] if rows else 0,
-        "to_lead": price_to_lead(),
+        "top": top,
+        "to_lead": top + 1 if top else MIN_FIRST_BID,
     }
