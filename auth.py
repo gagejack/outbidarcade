@@ -149,3 +149,13 @@ def consume_reset(token: str) -> int | None:
             (now, _hash_token(token)),
         )
     return int(row["user_id"])
+
+
+def new_csrf() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def csrf_ok(cookie_value: str | None, form_value: str | None) -> bool:
+    if not cookie_value or not form_value:
+        return False
+    return secrets.compare_digest(cookie_value, form_value)
