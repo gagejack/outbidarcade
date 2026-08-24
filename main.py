@@ -6,11 +6,14 @@ bids never expire and top-ups stack. State lives in SQLite under /data.
 
 from __future__ import annotations
 
+import os
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
+import stripe
+from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import (
     HTMLResponse,
@@ -22,6 +25,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
+
+load_dotenv()
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
 ASSET_VERSION = "1"
 PLATFORMS = ["PC", "Steam", "Switch", "PS5", "Xbox", "Mobile", "Web", "VR", "itch.io"]
@@ -239,7 +246,9 @@ async def submit(request: Request):
         pending = db.bids_for(created["id"])
         if pending:
             db.confirm_bid(pending[0]["id"])
-    return RedirectResponse(f"/listing/{created['token']}", status_code=303)
+        return RedirectResponse(f"/listing/{created['token']}", status_code=303)
+    pending = db.bids_for(created["id"])
+    return RedirectResponse(f"/checkout/{pending[0]['id']}", status_code=303)
 
 
 @app.get("/listing/{token}", response_class=HTMLResponse)
@@ -286,7 +295,52 @@ def topup(request: Request, token: str, amount: str = Form("")):
     bid_id = db.add_bid(listing["id"], value)
     if db.get_setting("auto_confirm") == "1":
         db.confirm_bid(bid_id)
-    return RedirectResponse(f"/listing/{token}#bids", status_code=303)
+        return RedirectResponse(f"/listing/{token}#bids", status_code=303)
+    return RedirectResponse(f"/checkout/{bid_id}", status_code=303)
+
+
+@app.get("/checkout/{bid_id}")
+def checkout(request: Request, bid_id: int):
+    bid = db.get_bid(bid_id)
+    if not bid:
+        return render(request, "notfound.html", {}, status=404)
+    if bid["status"] == "confirmed":
+        return RedirectResponse(f"/listing/{bid['manage_token']}", status_code=303)
+    base = str(request.base_url).rstrip("/")
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        line_items=[
+            {
+                "price_data": {
+                    "currency": "usd",
+                    "unit_amount": bid["amount"] * 100,
+                    "product_data": {"name": f"Outbid Arcade bid — {bid['listing_title']}"},
+                },
+                "quantity": 1,
+            }
+        ],
+        client_reference_id=str(bid_id),
+        success_url=f"{base}/listing/{bid['manage_token']}?paid=1",
+        cancel_url=f"{base}/listing/{bid['manage_token']}",
+    )
+    return RedirectResponse(session.url, status_code=303)
+
+
+@app.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except (ValueError, stripe.SignatureVerificationError):
+        return JSONResponse({"error": "bad signature"}, status_code=400)
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        bid_id = session["client_reference_id"] if "client_reference_id" in session else None
+        if bid_id:
+            db.confirm_bid(int(bid_id))
+    return JSONResponse({"received": True})
 
 
 @app.get("/game/{listing_id}", response_class=HTMLResponse)

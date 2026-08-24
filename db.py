@@ -350,6 +350,16 @@ def add_bid(listing_id: int, amount: int) -> int:
     return int(cur.lastrowid)
 
 
+def get_bid(bid_id: int) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT b.*, l.title AS listing_title, l.manage_token"
+            " FROM bids b JOIN listings l ON l.id = b.listing_id WHERE b.id=?",
+            (bid_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def confirm_bid(bid_id: int) -> None:
     now = int(time.time())
     with connect() as conn:

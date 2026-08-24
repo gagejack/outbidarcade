@@ -30,18 +30,13 @@
     {% endif %}
   </div>
 
-  {% set pending_total = bids | selectattr('status', 'equalto', 'pending') | map(attribute='amount') | sum %}
-  {% if pending_total %}
+  {% set pending_bids = bids | selectattr('status', 'equalto', 'pending') | list %}
+  {% if pending_bids %}
   <div class="card pay-card">
-    <h2>Pay {{ pending_total | money }}</h2>
-    {% if payment_link %}
-      <p>Send exactly {{ pending_total | money }} and mention <code>{{ listing.title }}</code> so it can be matched to your listing.</p>
-      <a class="btn btn-big" href="{{ payment_link }}" target="_blank" rel="noopener">Pay {{ pending_total | money }}</a>
-    {% else %}
-      <p>Payment details are being set up. The operator will contact you at
-      {% if listing.email %}<strong>{{ listing.email }}</strong>{% else %}the address you left{% endif %}
-      with how to send {{ pending_total | money }}.</p>
-    {% endif %}
+    {% for b in pending_bids %}
+      <h2>Pay {{ b.amount | money }}</h2>
+      <a class="btn btn-big" href="/checkout/{{ b.id }}">Pay {{ b.amount | money }} with card</a>
+    {% endfor %}
     {% if payment_note %}<p class="muted small pay-note">{{ payment_note }}</p>{% endif %}
   </div>
   {% endif %}

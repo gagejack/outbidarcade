@@ -62,6 +62,23 @@ If more capacity is genuinely needed, the order is:
 TODO
 ====
 
+HIGH PRIORITY — from the user-accounts branch final review (2026-08-24)
+[ ] /submit/resume loses the draft if listing creation fails after the
+    draft is claimed (main.py). Not reachable via a bad amount, but
+    reachable on a DB error — user gets bounced to an empty /submit form
+    with no explanation and no way to recover what they typed. Fix:
+    re-park the payload with auth.save_draft() before redirecting on
+    that failure path.
+[ ] /logout with a missing/expired CSRF token silently no-ops (main.py).
+    CSRF cookie lives 24h, session lives 30 days, so a user whose CSRF
+    cookie expired mid-session clicks "Sign out", lands back on the
+    board, and is still logged in with no error shown. Fix: render an
+    error instead of a bare redirect on CSRF failure.
+[ ] oa_admin cookie is missing secure=True (main.py, admin_claim /
+    admin_login). Pre-existing, not introduced by the accounts branch,
+    but every cookie added since (oa_user, oa_csrf, oa_state, oa_draft)
+    sets secure=secure_cookies() and this one doesn't. One-line fix.
+
 [ ] Post to Reddit. Check each sub's self-promo rules first; most remove
     or ban on sight. Candidates: r/SideProject, r/InternetIsBeautiful,
     r/webdev. Preview the link card at reddit.com/submit without posting.
