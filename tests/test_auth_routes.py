@@ -41,7 +41,8 @@ def test_register_rejects_mismatched_confirmation(client):
 
 def test_register_rejects_a_duplicate_email(client):
     register(client)
-    client.post("/logout", data={"csrf": "x"}, follow_redirects=False)
+    page = client.get("/register")
+    client.post("/logout", data={"csrf": extract_csrf(page.text)}, follow_redirects=False)
     page = client.get("/register")
     resp = client.post("/register", data={
         "email": "dev@studio.com", "password": "correct horse battery",

@@ -12,7 +12,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -531,7 +531,12 @@ async def login(request: Request):
 
 
 @app.post("/logout")
-def logout(request: Request):
+async def logout(request: Request):
+    raw = await request.form()
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        # A forced logout is low-harm but still a state change, so refuse it
+        # rather than acting on a request the visitor did not make.
+        return RedirectResponse("/", status_code=303)
     auth.end_session(request.cookies.get(USER_COOKIE))
     resp = RedirectResponse("/", status_code=303)
     resp.delete_cookie(USER_COOKIE)
@@ -664,7 +669,13 @@ def admin_home(request: Request):
 
 
 @app.post("/admin/claim", response_class=HTMLResponse)
-def admin_claim(request: Request, password: str = Form(""), confirm: str = Form("")):
+async def admin_claim(request: Request):
+    raw = await request.form()
+    password = str(raw.get("password", ""))
+    confirm = str(raw.get("confirm", ""))
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "admin_claim.html",
+                      {"error": "That form expired. Try again."}, status=400)
     if db.admin_exists():
         return RedirectResponse("/admin", status_code=303)
     if rate_limited(request, "claim", 10, 3600):
@@ -688,7 +699,12 @@ def admin_claim(request: Request, password: str = Form(""), confirm: str = Form(
 
 
 @app.post("/admin/login", response_class=HTMLResponse)
-def admin_login(request: Request, password: str = Form("")):
+async def admin_login(request: Request):
+    raw = await request.form()
+    password = str(raw.get("password", ""))
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "admin_login.html",
+                      {"error": "That form expired. Try again."}, status=400)
     if rate_limited(request, "login", 10, 900):
         return render(
             request, "admin_login.html", {"error": "Too many attempts. Wait 15 minutes."}, status=429
@@ -702,7 +718,10 @@ def admin_login(request: Request, password: str = Form("")):
 
 
 @app.post("/admin/logout")
-def admin_logout(request: Request):
+async def admin_logout(request: Request):
+    raw = await request.form()
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return RedirectResponse("/admin", status_code=303)
     db.drop_session(request.cookies.get("oa_admin"))
     resp = RedirectResponse("/", status_code=303)
     resp.delete_cookie("oa_admin")
@@ -710,17 +729,30 @@ def admin_logout(request: Request):
 
 
 @app.post("/admin/action")
-def admin_action(
-    request: Request,
-    action: str = Form(""),
-    bid_id: int = Form(0),
-    listing_id: int = Form(0),
-    payment_link: str = Form(""),
-    payment_note: str = Form(""),
-    auto_confirm: str = Form(""),
-):
+async def admin_action(request: Request):
     if not require_admin(request):
         return RedirectResponse("/admin", status_code=303)
+    raw = await request.form()
+    action = str(raw.get("action", ""))
+    bid_id = int(raw.get("bid_id") or 0)
+    listing_id = int(raw.get("listing_id") or 0)
+    payment_link = str(raw.get("payment_link", ""))
+    payment_note = str(raw.get("payment_note", ""))
+    auto_confirm = str(raw.get("auto_confirm", ""))
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(
+            request,
+            "admin.html",
+            {
+                "pending": db.pending_bids(),
+                "listings": db.all_listings(),
+                "stats": db.stats(),
+                "payment_link": db.get_setting("payment_link"),
+                "payment_note": db.get_setting("payment_note"),
+                "auto_confirm": db.get_setting("auto_confirm") == "1",
+            },
+            status=400,
+        )
     if action == "confirm" and bid_id:
         db.confirm_bid(bid_id)
     elif action == "reject" and bid_id:
