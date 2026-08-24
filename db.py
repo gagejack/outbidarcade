@@ -42,6 +42,17 @@ def connect():
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
+        # Pre-launch: the ownership model changed from a secret token to a
+        # user account, so the old listings/sessions tables are dropped
+        # rather than migrated. See docs/superpowers/specs/2026-08-23-user-accounts-design.md
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(listings)")}
+        if cols and "manage_token" in cols:
+            conn.executescript(
+                "DROP TABLE IF EXISTS bids;"
+                "DROP TABLE IF EXISTS events;"
+                "DROP TABLE IF EXISTS listings;"
+                "DROP TABLE IF EXISTS sessions;"
+            )
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS listings (
@@ -54,7 +65,7 @@ def init_db() -> None:
                 studio TEXT NOT NULL DEFAULT '',
                 platforms TEXT NOT NULL DEFAULT '',
                 email TEXT NOT NULL DEFAULT '',
-                manage_token TEXT NOT NULL,
+                user_id INTEGER REFERENCES users(id),
                 hidden INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 live_at INTEGER
@@ -79,10 +90,40 @@ def init_db() -> None:
                 value TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS sessions (
-                token TEXT PRIMARY KEY,
+                token      TEXT PRIMARY KEY,
+                user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                password_hash TEXT NOT NULL DEFAULT '',
+                display_name  TEXT NOT NULL DEFAULT '',
+                created_at    INTEGER NOT NULL,
+                last_login_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS identities (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider     TEXT NOT NULL,
+                provider_uid TEXT NOT NULL,
+                created_at   INTEGER NOT NULL,
+                UNIQUE(provider, provider_uid)
+            );
+            CREATE TABLE IF NOT EXISTS reset_tokens (
+                token_hash TEXT PRIMARY KEY,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                expires_at INTEGER NOT NULL,
+                used_at    INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS drafts (
+                id         TEXT PRIMARY KEY,
+                payload    TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_bids_listing ON bids(listing_id);
+            CREATE INDEX IF NOT EXISTS idx_identities_user ON identities(user_id);
+            CREATE INDEX IF NOT EXISTS idx_listings_user ON listings(user_id);
             """
         )
         # Migrations for databases created by an older build. /data outlives
