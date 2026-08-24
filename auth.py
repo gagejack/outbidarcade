@@ -227,3 +227,45 @@ def user_from_profile(profile: dict) -> tuple[dict | None, str]:
     user_id = create_user(email, "", profile.get("name", ""))
     _link_identity(user_id, provider, uid)
     return get_user(user_id), ""
+
+
+def save_draft(payload: dict) -> str:
+    """Park a validated submission while the visitor signs in.
+
+    Server-side rather than a signed cookie: a SameSite=Lax cookie is not
+    reliably returned on a cross-site OAuth callback, and a form carrying an
+    image URL can exceed the 4KB cookie limit.
+    """
+    draft_id = secrets.token_urlsafe(24)
+    now = int(time.time())
+    with db.connect() as conn:
+        conn.execute("DELETE FROM drafts WHERE created_at < ?", (now - DRAFT_TTL,))
+        conn.execute(
+            "INSERT INTO drafts(id, payload, created_at) VALUES(?,?,?)",
+            (draft_id, json.dumps(payload), now),
+        )
+    return draft_id
+
+
+def load_draft(draft_id: str | None) -> dict | None:
+    if not draft_id:
+        return None
+    cutoff = int(time.time()) - DRAFT_TTL
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT payload FROM drafts WHERE id=? AND created_at >= ?",
+            (draft_id, cutoff),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["payload"])
+    except ValueError:
+        return None
+
+
+def delete_draft(draft_id: str | None) -> None:
+    if not draft_id:
+        return
+    with db.connect() as conn:
+        conn.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
