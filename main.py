@@ -34,7 +34,7 @@ load_dotenv()
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
-ASSET_VERSION = "1"
+ASSET_VERSION = "2"
 PLATFORMS = ["PC", "Steam", "Switch", "PS5", "Xbox", "Mobile", "Web", "VR", "itch.io"]
 SITE_NAME = "Outbid Arcade"
 TAGLINE = "The pay-to-rank leaderboard for video games."
