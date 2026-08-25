@@ -7,6 +7,7 @@ bids never expire and top-ups stack. State lives in SQLite under /data.
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -14,7 +15,7 @@ from urllib.parse import urlparse
 
 import stripe
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -24,7 +25,10 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import auth
 import db
+import mail
+import oauth
 
 load_dotenv()
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -34,6 +38,32 @@ ASSET_VERSION = "1"
 PLATFORMS = ["PC", "Steam", "Switch", "PS5", "Xbox", "Mobile", "Web", "VR", "itch.io"]
 SITE_NAME = "Outbid Arcade"
 TAGLINE = "The pay-to-rank leaderboard for video games."
+
+USER_COOKIE = "oa_user"
+CSRF_COOKIE = "oa_csrf"
+DRAFT_COOKIE = "oa_draft"
+STATE_COOKIE = "oa_state"
+
+
+def secure_cookies() -> bool:
+    return oauth.base_url().startswith("https://")
+
+
+def current_user(request: Request) -> dict | None:
+    return auth.user_for_session(request.cookies.get(USER_COOKIE))
+
+
+def set_session_cookie(resp, token: str) -> None:
+    resp.set_cookie(USER_COOKIE, token, httponly=True, samesite="lax",
+                    secure=secure_cookies(), max_age=db.SESSION_TTL)
+
+
+def csrf_for(request: Request) -> str:
+    return request.cookies.get(CSRF_COOKIE) or auth.new_csrf()
+
+
+def csrf_valid(request: Request, form_value: str) -> bool:
+    return auth.csrf_ok(request.cookies.get(CSRF_COOKIE), form_value)
 
 
 @asynccontextmanager
@@ -71,6 +101,10 @@ templates.env.filters["ago"] = ago
 
 
 def render(request: Request, name: str, ctx: dict | None = None, status: int = 200):
+    user = ctx.pop("_user", None) if ctx else None
+    if user is None:
+        user = current_user(request)
+    token = csrf_for(request)
     data = {
         "request": request,
         "v": ASSET_VERSION,
@@ -80,9 +114,15 @@ def render(request: Request, name: str, ctx: dict | None = None, status: int = 2
         "min_first": db.MIN_FIRST_BID,
         "min_top_up": db.MIN_TOP_UP,
         "is_admin": db.session_valid(request.cookies.get("oa_admin")),
+        "user": user,
+        "csrf": token,
+        "providers": oauth.enabled_providers(),
     }
     data.update(ctx or {})
-    return templates.TemplateResponse(request, name, data, status_code=status)
+    resp = templates.TemplateResponse(request, name, data, status_code=status)
+    resp.set_cookie(CSRF_COOKIE, token, httponly=True, samesite="lax",
+                    secure=secure_cookies(), max_age=86400)
+    return resp
 
 
 # ------------------------------------------------------------ light limits
@@ -214,6 +254,8 @@ async def submit(request: Request):
             request, "submit.html", {"stats": db.stats(), "form": form, "error": msg}, status=400
         )
 
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return fail("That form expired. Try again.")
     if field("website"):  # honeypot
         return fail("Something went wrong. Try again.")
     if rate_limited(request, "submit", 5, 3600):
@@ -241,62 +283,51 @@ async def submit(request: Request):
     if err:
         return fail(err)
 
-    created = db.create_listing(form, value)
+    user = current_user(request)
+    if not user:
+        # Park the validated form so nothing is retyped after signing in.
+        # A DB row rather than a cookie: SameSite=Lax cookies are not reliably
+        # returned on an OAuth callback, and this payload can exceed 4KB.
+        draft_id = auth.save_draft(form)
+        resp = RedirectResponse("/login", status_code=303)
+        resp.set_cookie(DRAFT_COOKIE, draft_id, httponly=True, samesite="lax",
+                        secure=secure_cookies(), max_age=3600)
+        return resp
+
+    return listing_from_form(form, value, user["id"])
+
+
+def listing_from_form(form: dict, amount: int, user_id: int):
+    created = db.create_listing(form, amount, user_id)
     if db.get_setting("auto_confirm") == "1":
         pending = db.bids_for(created["id"])
         if pending:
             db.confirm_bid(pending[0]["id"])
-        return RedirectResponse(f"/listing/{created['token']}", status_code=303)
+        return RedirectResponse(f"/listing/{created['id']}", status_code=303)
     pending = db.bids_for(created["id"])
     return RedirectResponse(f"/checkout/{pending[0]['id']}", status_code=303)
 
 
-@app.get("/listing/{token}", response_class=HTMLResponse)
-def manage(request: Request, token: str):
-    listing = db.get_listing_by_token(token)
-    if not listing:
-        return render(request, "notfound.html", {}, status=404)
-    return render(
-        request,
-        "manage.html",
-        {
-            "listing": listing,
-            "bids": db.bids_for(listing["id"]),
-            "stats": db.stats(),
-            "payment_link": db.get_setting("payment_link"),
-            "payment_note": db.get_setting("payment_note"),
-            "error": None,
-        },
-    )
-
-
-@app.post("/listing/{token}/topup", response_class=HTMLResponse)
-def topup(request: Request, token: str, amount: str = Form("")):
-    listing = db.get_listing_by_token(token)
-    if not listing:
-        return render(request, "notfound.html", {}, status=404)
-    value, err = parse_amount(amount, db.MIN_TOP_UP)
-    if not err and rate_limited(request, "topup", 10, 3600):
-        err = "Slow down a moment, then try again."
+@app.get("/submit/resume")
+def submit_resume(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    # Claiming deletes the row and hands back the payload in one statement, so
+    # a double-click cannot turn one parked form into two listings.
+    draft = auth.claim_draft(request.cookies.get(DRAFT_COOKIE))
+    if not draft:
+        resp = RedirectResponse("/submit", status_code=303)
+        resp.delete_cookie(DRAFT_COOKIE)
+        return resp
+    value, err = parse_amount(draft.get("amount", ""), db.MIN_FIRST_BID)
     if err:
-        return render(
-            request,
-            "manage.html",
-            {
-                "listing": listing,
-                "bids": db.bids_for(listing["id"]),
-                "stats": db.stats(),
-                "payment_link": db.get_setting("payment_link"),
-                "payment_note": db.get_setting("payment_note"),
-                "error": err,
-            },
-            status=400,
-        )
-    bid_id = db.add_bid(listing["id"], value)
-    if db.get_setting("auto_confirm") == "1":
-        db.confirm_bid(bid_id)
-        return RedirectResponse(f"/listing/{token}#bids", status_code=303)
-    return RedirectResponse(f"/checkout/{bid_id}", status_code=303)
+        resp = RedirectResponse("/submit", status_code=303)
+        resp.delete_cookie(DRAFT_COOKIE)
+        return resp
+    resp = listing_from_form(draft, value, user["id"])
+    resp.delete_cookie(DRAFT_COOKIE)
+    return resp
 
 
 @app.get("/checkout/{bid_id}")
@@ -305,7 +336,7 @@ def checkout(request: Request, bid_id: int):
     if not bid:
         return render(request, "notfound.html", {}, status=404)
     if bid["status"] == "confirmed":
-        return RedirectResponse(f"/listing/{bid['manage_token']}", status_code=303)
+        return RedirectResponse(f"/listing/{bid['listing_id']}", status_code=303)
     base = str(request.base_url).rstrip("/")
     session = stripe.checkout.Session.create(
         mode="payment",
@@ -320,8 +351,8 @@ def checkout(request: Request, bid_id: int):
             }
         ],
         client_reference_id=str(bid_id),
-        success_url=f"{base}/listing/{bid['manage_token']}?paid=1",
-        cancel_url=f"{base}/listing/{bid['manage_token']}",
+        success_url=f"{base}/listing/{bid['listing_id']}?paid=1",
+        cancel_url=f"{base}/listing/{bid['listing_id']}",
     )
     return RedirectResponse(session.url, status_code=303)
 
@@ -349,6 +380,354 @@ def game(request: Request, listing_id: int):
     if not listing or listing["hidden"] or listing["total"] <= 0:
         return render(request, "notfound.html", {}, status=404)
     return render(request, "game.html", {"listing": listing, "stats": db.stats()})
+
+
+# --------------------------------------------------------------- user pages
+
+
+def owned_listing_or_none(request: Request, listing_id: int):
+    """Return the listing only if the signed-in user owns it.
+
+    A non-owner is given the same 404 as a missing listing, so the route
+    never confirms that a listing exists.
+    """
+    user = current_user(request)
+    if not user or not db.owns_listing(user["id"], listing_id):
+        return None, user
+    return db.get_listing(listing_id), user
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    return render(request, "dashboard.html", {
+        "_user": user,
+        "listings": db.listings_for_user(user["id"]),
+        "stats": db.stats(),
+    })
+
+
+@app.get("/account", response_class=HTMLResponse)
+def account(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    return render(request, "account.html", {
+        "_user": user,
+        "linked": auth.identities_for(user["id"]),
+        "stats": db.stats(),
+        "error": None,
+    })
+
+
+@app.get("/listing/{listing_id}", response_class=HTMLResponse)
+def manage(request: Request, listing_id: int):
+    listing, _ = owned_listing_or_none(request, listing_id)
+    if not listing:
+        return render(request, "notfound.html", {}, status=404)
+    return render(request, "manage.html", {
+        "listing": listing,
+        "bids": db.bids_for(listing_id),
+        "stats": db.stats(),
+        "payment_link": db.get_setting("payment_link"),
+        "payment_note": db.get_setting("payment_note"),
+        "error": None,
+    })
+
+
+@app.get("/listing/{listing_id}/edit", response_class=HTMLResponse)
+def edit_form(request: Request, listing_id: int):
+    listing, _ = owned_listing_or_none(request, listing_id)
+    if not listing:
+        return render(request, "notfound.html", {}, status=404)
+    return render(request, "edit.html", {
+        "listing": listing, "form": listing, "stats": db.stats(), "error": None,
+    })
+
+
+@app.post("/listing/{listing_id}/edit", response_class=HTMLResponse)
+async def edit(request: Request, listing_id: int):
+    listing, _ = owned_listing_or_none(request, listing_id)
+    if not listing:
+        return render(request, "notfound.html", {}, status=404)
+    raw = await request.form()
+
+    def field(name: str, limit: int = 200) -> str:
+        return str(raw.get(name, "")).strip()[:limit]
+
+    form = {
+        "title": field("title", 70),
+        "tagline": field("tagline", 140),
+        "url": field("url", 400),
+        "image_url": field("image_url", 400),
+        "studio": field("studio", 60),
+        "platforms": ",".join(
+            [p for p in raw.getlist("platforms") if p in PLATFORMS][:4]
+        ),
+    }
+
+    def fail(msg: str):
+        merged = dict(listing)
+        merged.update(form)
+        merged["platform_list"] = [p for p in form["platforms"].split(",") if p]
+        return render(request, "edit.html", {
+            "listing": listing, "form": merged, "stats": db.stats(), "error": msg,
+        }, status=400)
+
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return fail("That form expired. Try again.")
+    if len(form["title"]) < 2:
+        return fail("Your game needs a name.")
+    if len(form["tagline"]) < 8:
+        return fail("Add a one-line pitch, at least a few words.")
+    link = clean_url(form["url"])
+    if not link:
+        return fail("A working link to the game is required.")
+    form["url"] = link
+    form["image_url"] = clean_url(form["image_url"])
+
+    db.update_listing(listing_id, form)
+    return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+
+
+@app.post("/listing/{listing_id}/topup", response_class=HTMLResponse)
+async def topup(request: Request, listing_id: int):
+    listing, _ = owned_listing_or_none(request, listing_id)
+    if not listing:
+        return render(request, "notfound.html", {}, status=404)
+    raw = await request.form()
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "notfound.html", {}, status=404)
+    value, err = parse_amount(str(raw.get("amount", "")), db.MIN_TOP_UP)
+    if not err and rate_limited(request, "topup", 10, 3600):
+        err = "Slow down a moment, then try again."
+    if err:
+        return render(request, "manage.html", {
+            "listing": listing,
+            "bids": db.bids_for(listing_id),
+            "stats": db.stats(),
+            "payment_link": db.get_setting("payment_link"),
+            "payment_note": db.get_setting("payment_note"),
+            "error": err,
+        }, status=400)
+    bid_id = db.add_bid(listing_id, value)
+    if db.get_setting("auto_confirm") == "1":
+        db.confirm_bid(bid_id)
+        return RedirectResponse(f"/listing/{listing_id}#bids", status_code=303)
+    return RedirectResponse(f"/checkout/{bid_id}", status_code=303)
+
+
+# --------------------------------------------------------------------- auth
+
+
+@app.get("/register", response_class=HTMLResponse)
+def register_form(request: Request):
+    if current_user(request):
+        return RedirectResponse("/dashboard", status_code=303)
+    return render(request, "register.html", {"error": None, "form": {}})
+
+
+@app.post("/register", response_class=HTMLResponse)
+async def register(request: Request):
+    raw = await request.form()
+    email = str(raw.get("email", "")).strip()[:120]
+    password = str(raw.get("password", ""))
+    confirm = str(raw.get("confirm", ""))
+    display_name = str(raw.get("display_name", "")).strip()[:60]
+    form = {"email": email, "display_name": display_name}
+
+    def fail(msg: str, status: int = 400):
+        return render(request, "register.html", {"error": msg, "form": form}, status=status)
+
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return fail("That form expired. Try again.")
+    if rate_limited(request, "register", 5, 3600):
+        return fail("Too many sign-ups from here. Try again later.", 429)
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return fail("That does not look like an email address.")
+    problem = auth.password_problem(password)
+    if problem:
+        return fail(problem)
+    if password != confirm:
+        return fail("The two passwords do not match.")
+    if auth.get_user_by_email(email):
+        return fail("There is already an account with that address. Try signing in.")
+
+    user_id = auth.create_user(email, password, display_name)
+    resp = RedirectResponse(next_after_login(request), status_code=303)
+    set_session_cookie(resp, auth.start_session(user_id))
+    return resp
+
+
+def next_after_login(request: Request) -> str:
+    """Send a visitor with a parked submission back to finish it."""
+    if request.cookies.get(DRAFT_COOKIE):
+        return "/submit/resume"
+    return "/dashboard"
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request):
+    if current_user(request):
+        return RedirectResponse("/dashboard", status_code=303)
+    return render(request, "login.html", {"error": None, "email": ""})
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login(request: Request):
+    raw = await request.form()
+    email = str(raw.get("email", "")).strip()[:120]
+    password = str(raw.get("password", ""))
+
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "login.html",
+                      {"error": "That form expired. Try again.", "email": email}, status=400)
+    if rate_limited(request, "login", 10, 900):
+        return render(request, "login.html",
+                      {"error": "Too many attempts. Wait 15 minutes.", "email": email},
+                      status=429)
+    user = auth.check_login(email, password)
+    if not user:
+        return render(request, "login.html",
+                      {"error": "Wrong email or password.", "email": email}, status=401)
+    resp = RedirectResponse(next_after_login(request), status_code=303)
+    set_session_cookie(resp, auth.start_session(user["id"]))
+    return resp
+
+
+@app.post("/logout")
+async def logout(request: Request):
+    raw = await request.form()
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        # A forced logout is low-harm but still a state change, so refuse it
+        # rather than acting on a request the visitor did not make.
+        return RedirectResponse("/", status_code=303)
+    auth.end_session(request.cookies.get(USER_COOKIE))
+    resp = RedirectResponse("/", status_code=303)
+    resp.delete_cookie(USER_COOKIE)
+    return resp
+
+
+@app.get("/forgot", response_class=HTMLResponse)
+def forgot_form(request: Request):
+    return render(request, "forgot.html", {"error": None, "sent": False})
+
+
+@app.post("/forgot", response_class=HTMLResponse)
+async def forgot(request: Request):
+    raw = await request.form()
+    email = str(raw.get("email", "")).strip()[:120]
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "forgot.html",
+                      {"error": "That form expired. Try again.", "sent": False}, status=400)
+    if not rate_limited(request, "forgot", 5, 3600):
+        user = auth.get_user_by_email(email)
+        if user:
+            token = auth.issue_reset(user["id"])
+            mail.send_reset_email(user["email"], f"{oauth.base_url()}/reset/{token}")
+    # The same response either way, so this page cannot be used to discover
+    # which addresses have accounts.
+    return render(request, "forgot.html", {"error": None, "sent": True})
+
+
+@app.get("/reset/{token}", response_class=HTMLResponse)
+def reset_form(request: Request, token: str):
+    if not auth.reset_is_live(token):
+        return render(request, "notfound.html", {}, status=404)
+    return render(request, "reset.html", {"error": None, "token": token})
+
+
+@app.post("/reset/{token}", response_class=HTMLResponse)
+async def reset(request: Request, token: str):
+    raw = await request.form()
+    password = str(raw.get("password", ""))
+    confirm = str(raw.get("confirm", ""))
+
+    def fail(msg: str):
+        return render(request, "reset.html", {"error": msg, "token": token}, status=400)
+
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return fail("That form expired. Try again.")
+    problem = auth.password_problem(password)
+    if problem:
+        return fail(problem)
+    if password != confirm:
+        return fail("The two passwords do not match.")
+
+    user_id = auth.consume_reset(token)
+    if not user_id:
+        return render(request, "notfound.html", {}, status=404)
+    auth.set_password(user_id, password)
+    auth.end_all_sessions(user_id)
+    resp = RedirectResponse("/dashboard", status_code=303)
+    set_session_cookie(resp, auth.start_session(user_id))
+    return resp
+
+
+@app.get("/auth/{provider}")
+def oauth_start(request: Request, provider: str):
+    if not oauth.is_enabled(provider):
+        return render(request, "notfound.html", {}, status=404)
+    if rate_limited(request, "oauth", 20, 3600):
+        return render(request, "login.html",
+                      {"error": "Too many attempts. Try again later.", "email": ""},
+                      status=429)
+    state = secrets.token_urlsafe(24)
+    # A signed-in visitor is linking a provider to the account they already
+    # have, not signing in as whoever the provider says they are.
+    intent = "link" if current_user(request) else "signin"
+    resp = RedirectResponse(oauth.authorize_url(provider, state), status_code=303)
+    resp.set_cookie(STATE_COOKIE, f"{provider}:{intent}:{state}", httponly=True,
+                    samesite="lax", secure=secure_cookies(), max_age=600)
+    return resp
+
+
+@app.get("/auth/{provider}/callback")
+def oauth_callback(request: Request, provider: str, code: str = "", state: str = ""):
+    if not oauth.is_enabled(provider):
+        return render(request, "notfound.html", {}, status=404)
+
+    def fail(msg: str, status: int = 400):
+        return render(request, "login.html", {"error": msg, "email": ""}, status=status)
+
+    expected = request.cookies.get(STATE_COOKIE, "")
+    if not state or expected not in (
+        f"{provider}:link:{state}",
+        f"{provider}:signin:{state}",
+    ):
+        return fail("That sign-in could not be verified. Start again.")
+    linking = expected == f"{provider}:link:{state}"
+    if not code:
+        return fail("That sign-in did not complete. Try again.")
+
+    profile = oauth.fetch_profile(provider, code)
+    if not profile:
+        return fail("That provider could not be reached. Try again.")
+
+    user = current_user(request)
+    if linking and user:
+        ok, error = auth.link_provider_to_user(user["id"], profile)
+        if not ok:
+            return render(request, "account.html", {
+                "_user": user,
+                "linked": auth.identities_for(user["id"]),
+                "stats": db.stats(),
+                "error": error,
+            }, status=400)
+        resp = RedirectResponse("/account", status_code=303)
+        resp.delete_cookie(STATE_COOKIE)
+        return resp
+
+    found, error = auth.user_from_profile(profile)
+    if not found:
+        return fail(error)
+
+    resp = RedirectResponse(next_after_login(request), status_code=303)
+    set_session_cookie(resp, auth.start_session(found["id"]))
+    resp.delete_cookie(STATE_COOKIE)
+    return resp
 
 
 # ------------------------------------------------------------------- admin
@@ -379,7 +758,13 @@ def admin_home(request: Request):
 
 
 @app.post("/admin/claim", response_class=HTMLResponse)
-def admin_claim(request: Request, password: str = Form(""), confirm: str = Form("")):
+async def admin_claim(request: Request):
+    raw = await request.form()
+    password = str(raw.get("password", ""))
+    confirm = str(raw.get("confirm", ""))
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "admin_claim.html",
+                      {"error": "That form expired. Try again."}, status=400)
     if db.admin_exists():
         return RedirectResponse("/admin", status_code=303)
     if rate_limited(request, "claim", 10, 3600):
@@ -403,7 +788,12 @@ def admin_claim(request: Request, password: str = Form(""), confirm: str = Form(
 
 
 @app.post("/admin/login", response_class=HTMLResponse)
-def admin_login(request: Request, password: str = Form("")):
+async def admin_login(request: Request):
+    raw = await request.form()
+    password = str(raw.get("password", ""))
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(request, "admin_login.html",
+                      {"error": "That form expired. Try again."}, status=400)
     if rate_limited(request, "login", 10, 900):
         return render(
             request, "admin_login.html", {"error": "Too many attempts. Wait 15 minutes."}, status=429
@@ -417,7 +807,10 @@ def admin_login(request: Request, password: str = Form("")):
 
 
 @app.post("/admin/logout")
-def admin_logout(request: Request):
+async def admin_logout(request: Request):
+    raw = await request.form()
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return RedirectResponse("/admin", status_code=303)
     db.drop_session(request.cookies.get("oa_admin"))
     resp = RedirectResponse("/", status_code=303)
     resp.delete_cookie("oa_admin")
@@ -425,17 +818,30 @@ def admin_logout(request: Request):
 
 
 @app.post("/admin/action")
-def admin_action(
-    request: Request,
-    action: str = Form(""),
-    bid_id: int = Form(0),
-    listing_id: int = Form(0),
-    payment_link: str = Form(""),
-    payment_note: str = Form(""),
-    auto_confirm: str = Form(""),
-):
+async def admin_action(request: Request):
     if not require_admin(request):
         return RedirectResponse("/admin", status_code=303)
+    raw = await request.form()
+    action = str(raw.get("action", ""))
+    bid_id = int(raw.get("bid_id") or 0)
+    listing_id = int(raw.get("listing_id") or 0)
+    payment_link = str(raw.get("payment_link", ""))
+    payment_note = str(raw.get("payment_note", ""))
+    auto_confirm = str(raw.get("auto_confirm", ""))
+    if not csrf_valid(request, str(raw.get("csrf", ""))):
+        return render(
+            request,
+            "admin.html",
+            {
+                "pending": db.pending_bids(),
+                "listings": db.all_listings(),
+                "stats": db.stats(),
+                "payment_link": db.get_setting("payment_link"),
+                "payment_note": db.get_setting("payment_note"),
+                "auto_confirm": db.get_setting("auto_confirm") == "1",
+            },
+            status=400,
+        )
     if action == "confirm" and bid_id:
         db.confirm_bid(bid_id)
     elif action == "reject" and bid_id:

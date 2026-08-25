@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ listing.title }} · {{ site_name }}{% endblock %}
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">Editing</p>
+  <h1>{{ listing.title }}</h1>
+  <p class="lede">Change how your game appears on the board. Your total and rank
+  are not affected.</p>
+
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+
+  <form class="card form" method="post" action="/listing/{{ listing.id }}/edit">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Game name
+      <input name="title" maxlength="70" required value="{{ form.title }}">
+    </label>
+    <label>One-line pitch
+      <input name="tagline" maxlength="140" required value="{{ form.tagline }}">
+    </label>
+    <label>Link
+      <input name="url" required value="{{ form.url }}">
+    </label>
+    <label>Cover image URL <span class="opt">optional</span>
+      <input name="image_url" value="{{ form.image_url }}">
+    </label>
+    <label>Studio or dev <span class="opt">optional</span>
+      <input name="studio" maxlength="60" value="{{ form.studio }}">
+    </label>
+
+    <fieldset class="platforms">
+      <legend>Platforms <span class="opt">pick up to 4</span></legend>
+      {% for p in platforms %}
+      <label class="check"><input type="checkbox" name="platforms" value="{{ p }}"{% if p in form.platform_list %} checked{% endif %}><span>{{ p }}</span></label>
+      {% endfor %}
+    </fieldset>
+
+    <button class="btn btn-big" type="submit">Save changes</button>
+    <p class="tiny muted"><a href="/listing/{{ listing.id }}">Back without saving</a></p>
+  </form>
+</main>
+{% endblock %}

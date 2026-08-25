@@ -8,6 +8,7 @@
   so do this now, before you share the link with anyone.</p>
   {% if error %}<p class="alert">{{ error }}</p>{% endif %}
   <form class="card form" method="post" action="/admin/claim">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
     <label>Password
       <input type="password" name="password" required minlength="10" autocomplete="new-password">
       <span class="hint">At least 10 characters. Store it in your password manager, there is no reset.</span>

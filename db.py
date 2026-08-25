@@ -44,6 +44,17 @@ def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
+        # Pre-launch: the ownership model changed from a secret token to a
+        # user account, so the old listings/sessions tables are dropped
+        # rather than migrated. See docs/superpowers/specs/2026-08-23-user-accounts-design.md
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(listings)")}
+        if cols and "manage_token" in cols:
+            conn.executescript(
+                "DROP TABLE IF EXISTS bids;"
+                "DROP TABLE IF EXISTS events;"
+                "DROP TABLE IF EXISTS listings;"
+                "DROP TABLE IF EXISTS sessions;"
+            )
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS listings (
@@ -56,7 +67,7 @@ def init_db() -> None:
                 studio TEXT NOT NULL DEFAULT '',
                 platforms TEXT NOT NULL DEFAULT '',
                 email TEXT NOT NULL DEFAULT '',
-                manage_token TEXT NOT NULL,
+                user_id INTEGER REFERENCES users(id),
                 hidden INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 live_at INTEGER
@@ -81,10 +92,40 @@ def init_db() -> None:
                 value TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS sessions (
-                token TEXT PRIMARY KEY,
+                token      TEXT PRIMARY KEY,
+                user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                password_hash TEXT NOT NULL DEFAULT '',
+                display_name  TEXT NOT NULL DEFAULT '',
+                created_at    INTEGER NOT NULL,
+                last_login_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS identities (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider     TEXT NOT NULL,
+                provider_uid TEXT NOT NULL,
+                created_at   INTEGER NOT NULL,
+                UNIQUE(provider, provider_uid)
+            );
+            CREATE TABLE IF NOT EXISTS reset_tokens (
+                token_hash TEXT PRIMARY KEY,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                expires_at INTEGER NOT NULL,
+                used_at    INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS drafts (
+                id         TEXT PRIMARY KEY,
+                payload    TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_bids_listing ON bids(listing_id);
+            CREATE INDEX IF NOT EXISTS idx_identities_user ON identities(user_id);
+            CREATE INDEX IF NOT EXISTS idx_listings_user ON listings(user_id);
             """
         )
         # Migrations for databases created by an older build. /data outlives
@@ -149,23 +190,30 @@ SESSION_TTL = 60 * 60 * 24 * 30
 
 
 def new_session() -> str:
+    """An operator session. User sessions are auth.start_session()."""
     token = secrets.token_urlsafe(32)
     now = int(time.time())
     with connect() as conn:
         # Expired sessions are swept here rather than on every page view, which
         # would put a write on read-only traffic.
         conn.execute("DELETE FROM sessions WHERE created_at < ?", (now - SESSION_TTL,))
-        conn.execute("INSERT INTO sessions(token, created_at) VALUES(?, ?)", (token, now))
+        conn.execute(
+            "INSERT INTO sessions(token, user_id, created_at) VALUES(?, NULL, ?)",
+            (token, now),
+        )
     return token
 
 
 def session_valid(token: str | None) -> bool:
+    """True only for operator sessions - user_id IS NULL."""
     if not token:
         return False
     cutoff = int(time.time()) - SESSION_TTL
     with connect() as conn:
         row = conn.execute(
-            "SELECT token FROM sessions WHERE token=? AND created_at >= ?", (token, cutoff)
+            "SELECT token FROM sessions WHERE token=? AND user_id IS NULL"
+            " AND created_at >= ?",
+            (token, cutoff),
         ).fetchone()
     return row is not None
 
@@ -298,12 +346,6 @@ def get_listing(listing_id: int) -> dict | None:
     return item
 
 
-def get_listing_by_token(token: str) -> dict | None:
-    with connect() as conn:
-        row = conn.execute("SELECT id FROM listings WHERE manage_token=?", (token,)).fetchone()
-    return get_listing(row["id"]) if row else None
-
-
 def bids_for(listing_id: int) -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
@@ -312,13 +354,12 @@ def bids_for(listing_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def create_listing(data: dict, amount: int) -> dict:
+def create_listing(data: dict, amount: int, user_id: int) -> dict:
     now = int(time.time())
-    token = secrets.token_urlsafe(24)
     with connect() as conn:
         cur = conn.execute(
             "INSERT INTO listings(slug, title, tagline, url, image_url, studio, platforms,"
-            " email, manage_token, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            " email, user_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (
                 slugify(data["title"]),
                 data["title"],
@@ -328,7 +369,7 @@ def create_listing(data: dict, amount: int) -> dict:
                 data.get("studio", ""),
                 data.get("platforms", ""),
                 data.get("email", ""),
-                token,
+                user_id,
                 now,
             ),
         )
@@ -337,7 +378,56 @@ def create_listing(data: dict, amount: int) -> dict:
             "INSERT INTO bids(listing_id, amount, status, created_at) VALUES(?,?,'pending',?)",
             (listing_id, amount, now),
         )
-    return {"id": listing_id, "token": token}
+    return {"id": listing_id}
+
+
+def owns_listing(user_id: int, listing_id: int) -> bool:
+    if not user_id or not listing_id:
+        return False
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM listings WHERE id=? AND user_id=?", (listing_id, user_id)
+        ).fetchone()
+    return row is not None
+
+
+def listings_for_user(user_id: int) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT l.*, COALESCE(SUM(CASE WHEN b.status='confirmed' THEN b.amount END), 0)"
+            " AS total, COUNT(CASE WHEN b.status='pending' THEN 1 END) AS pending_count"
+            " FROM listings l LEFT JOIN bids b ON b.listing_id=l.id"
+            " WHERE l.user_id=? GROUP BY l.id ORDER BY l.id DESC",
+            (user_id,),
+        ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["platform_list"] = [p for p in item["platforms"].split(",") if p]
+        out.append(item)
+    return out
+
+
+def update_listing(listing_id: int, data: dict) -> None:
+    """Editable fields only. Money and status are never touched here."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE listings SET slug=?, title=?, tagline=?, url=?, image_url=?,"
+            " studio=?, platforms=? WHERE id=?",
+            (
+                slugify(data["title"]),
+                data["title"],
+                data["tagline"],
+                data["url"],
+                data.get("image_url", ""),
+                data.get("studio", ""),
+                data.get("platforms", ""),
+                listing_id,
+            ),
+        )
+    # Every field above is rendered on the board, so the cache is now stale.
+    # Same contract as set_hidden/delete_listing.
+    _invalidate_board()
 
 
 def add_bid(listing_id: int, amount: int) -> int:
@@ -353,7 +443,7 @@ def add_bid(listing_id: int, amount: int) -> int:
 def get_bid(bid_id: int) -> dict | None:
     with connect() as conn:
         row = conn.execute(
-            "SELECT b.*, l.title AS listing_title, l.manage_token"
+            "SELECT b.*, l.title AS listing_title"
             " FROM bids b JOIN listings l ON l.id = b.listing_id WHERE b.id=?",
             (bid_id,),
         ).fetchone()
@@ -415,7 +505,7 @@ def delete_listing(listing_id: int) -> None:
 def pending_bids() -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
-            "SELECT b.*, l.title, l.url, l.email, l.manage_token,"
+            "SELECT b.*, l.title, l.url, l.email,"
             " COALESCE((SELECT SUM(amount) FROM bids x WHERE x.listing_id=l.id"
             "   AND x.status='confirmed'), 0) AS confirmed_total"
             " FROM bids b JOIN listings l ON l.id=b.listing_id"

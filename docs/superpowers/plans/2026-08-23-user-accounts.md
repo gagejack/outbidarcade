@@ -22,6 +22,10 @@
 - Minimum password length is 10 characters, matching the existing operator rule in `main.py`.
 - Every feature degrades when its env vars are missing: no provider credentials means the button is hidden; no `RESEND_API_KEY` means reset links are logged instead of emailed.
 - The site is pre-launch. No migration path for `manage_token` is required or wanted.
+- The app runs on ONE uvicorn worker, deliberately (see the comment in `Dockerfile`). Both the rate limiter (`main.py:_HITS`) and the board cache (`db.py:_board_cache`) are per-process memory. Never add a second worker, and never assume state is shared across processes.
+- `db.py` caches the board in `_board_cache` and drops it via `_invalidate_board()` on writes that change board-visible data (`confirm_bid`, `reject_bid`, `set_hidden`, `delete_listing`). Any new write touching listing fields shown on the board must invalidate too.
+- Sessions expire via `db.SESSION_TTL`. Expired rows are swept on WRITE (`new_session`, `start_session`), never on read; reads filter with `created_at >= cutoff` inside the SELECT. Keep that split — it keeps writes off read-only traffic.
+- `db.stats()`, `db.top_total()` and `db.price_to_lead()` accept an optional pre-fetched `rows` list. Passing it avoids a redundant board read where the caller already has one.
 
 ---
 
@@ -411,9 +415,11 @@ import time
 import db
 
 MIN_PASSWORD = 10
-SESSION_DAYS = 30
 RESET_TTL = 3600
 DRAFT_TTL = 86400
+
+# Session lifetime lives in db.SESSION_TTL (30 days), shared with operator
+# sessions since both live in the same table. Referenced as db.SESSION_TTL.
 
 
 def password_problem(password: str) -> str:
@@ -552,7 +558,7 @@ def test_ending_all_sessions_revokes_every_one(auth):
 def test_expired_sessions_stop_working(auth, database):
     uid = auth.create_user("dev@studio.com", "correct horse battery")
     token = auth.start_session(uid)
-    stale = int(time.time()) - (auth.SESSION_DAYS * 86400) - 60
+    stale = int(time.time()) - database.SESSION_TTL - 60
     with database.connect() as conn:
         conn.execute("UPDATE sessions SET created_at=? WHERE token=?", (stale, token))
     assert auth.user_for_session(token) is None
@@ -579,16 +585,25 @@ Expected: FAIL — `AttributeError: module 'auth' has no attribute 'start_sessio
 
 - [ ] **Step 3: Separate operator sessions from user sessions in `db.py`**
 
+IMPORTANT — the existing code sweeps expired sessions in `new_session()`, not
+in `session_valid()`, and filters expiry inside the SELECT. That is deliberate:
+it keeps writes off read-only traffic. Preserve that shape exactly; only add
+the `user_id` column handling. Do not reintroduce a DELETE in `session_valid`.
+
 Replace `db.new_session()` and `db.session_valid()` with:
 
 ```python
 def new_session() -> str:
     """An operator session. User sessions are auth.start_session()."""
     token = secrets.token_urlsafe(32)
+    now = int(time.time())
     with connect() as conn:
+        # Expired sessions are swept here rather than on every page view, which
+        # would put a write on read-only traffic.
+        conn.execute("DELETE FROM sessions WHERE created_at < ?", (now - SESSION_TTL,))
         conn.execute(
             "INSERT INTO sessions(token, user_id, created_at) VALUES(?, NULL, ?)",
-            (token, int(time.time())),
+            (token, now),
         )
     return token
 
@@ -597,38 +612,47 @@ def session_valid(token: str | None) -> bool:
     """True only for operator sessions - user_id IS NULL."""
     if not token:
         return False
-    cutoff = int(time.time()) - 60 * 60 * 24 * 30
+    cutoff = int(time.time()) - SESSION_TTL
     with connect() as conn:
-        conn.execute("DELETE FROM sessions WHERE created_at < ?", (cutoff,))
         row = conn.execute(
-            "SELECT token FROM sessions WHERE token=? AND user_id IS NULL", (token,)
+            "SELECT token FROM sessions WHERE token=? AND user_id IS NULL"
+            " AND created_at >= ?",
+            (token, cutoff),
         ).fetchone()
     return row is not None
 ```
+
+`SESSION_TTL` already exists in `db.py` (30 days). `auth.py` must reference it
+as `db.SESSION_TTL` rather than defining its own copy — user and operator
+sessions share one table and one lifetime.
 
 - [ ] **Step 4: Add the user session helpers to `auth.py`**
 
 ```python
 def start_session(user_id: int) -> str:
     token = secrets.token_urlsafe(32)
+    now = int(time.time())
     with db.connect() as conn:
+        # Sweep on write, matching db.new_session(): a DELETE here keeps
+        # read-only page views free of writes.
+        conn.execute("DELETE FROM sessions WHERE created_at < ?", (now - db.SESSION_TTL,))
         conn.execute(
             "INSERT INTO sessions(token, user_id, created_at) VALUES(?,?,?)",
-            (token, user_id, int(time.time())),
+            (token, user_id, now),
         )
     return token
 
 
 def user_for_session(token: str | None) -> dict | None:
+    """Read-only: expiry is filtered in the SELECT, never swept here."""
     if not token:
         return None
-    cutoff = int(time.time()) - SESSION_DAYS * 86400
+    cutoff = int(time.time()) - db.SESSION_TTL
     with db.connect() as conn:
-        conn.execute("DELETE FROM sessions WHERE created_at < ?", (cutoff,))
         row = conn.execute(
             "SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id"
-            " WHERE s.token=? AND s.user_id IS NOT NULL",
-            (token,),
+            " WHERE s.token=? AND s.user_id IS NOT NULL AND s.created_at >= ?",
+            (token, cutoff),
         ).fetchone()
     return dict(row) if row else None
 
@@ -1735,6 +1759,11 @@ git commit -m "feat: park half-finished submissions in a drafts table"
 - Modify: `db.py` (`create_listing`, `get_listing_by_token` removed, new helpers)
 - Create: `tests/test_ownership.py`
 
+**Context you need:** `db.py` caches the board in a module-level `_board_cache`,
+invalidated explicitly by `confirm_bid`, `reject_bid`, `set_hidden` and
+`delete_listing`. Any new write that changes board-visible data must call
+`_invalidate_board()` too. See Step 4.
+
 **Interfaces:**
 - Consumes: Task 2's `listings.user_id`.
 - Produces:
@@ -1834,6 +1863,30 @@ def test_update_does_not_touch_money(auth, database):
     before = database.get_listing(created["id"])["total"]
     database.update_listing(created["id"], dict(FORM, title="Deep Signal"))
     assert database.get_listing(created["id"])["total"] == before
+
+
+def test_edit_shows_on_the_board_immediately(auth, database):
+    """db.py caches the board. An edit must drop that cache."""
+    uid = auth.create_user("dev@studio.com", "correct horse battery")
+    created = database.create_listing(FORM, 12, uid)
+    database.confirm_bid(database.bids_for(created["id"])[0]["id"])
+    assert database.board()[0]["title"] == "Ghost Signal"  # warms the cache
+    database.update_listing(created["id"], dict(FORM, title="Deep Signal"))
+    assert database.board()[0]["title"] == "Deep Signal", (
+        "update_listing must call _invalidate_board()"
+    )
+
+
+def test_submitting_does_not_drop_the_board_cache(auth, database):
+    """A pending bid is not on the board, so the cache must survive."""
+    uid = auth.create_user("dev@studio.com", "correct horse battery")
+    first = database.create_listing(FORM, 12, uid)
+    database.confirm_bid(database.bids_for(first["id"])[0]["id"])
+    database.board()  # warm
+    database.create_listing(dict(FORM, title="Second Game"), 12, uid)
+    assert database._board_cache is not None, (
+        "create_listing should not invalidate: pending bids are not on the board"
+    )
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -1922,12 +1975,22 @@ def update_listing(listing_id: int, data: dict) -> None:
                 listing_id,
             ),
         )
+    # Every field above is rendered on the board, so the cache is now stale.
+    # Same contract as set_hidden/delete_listing.
+    _invalidate_board()
 ```
+
+**Do not skip the `_invalidate_board()` call.** `db.py` caches the board in a
+module-level `_board_cache` and drops it only on explicit writes. Without this
+line an edited title keeps serving the old value until some unrelated write
+happens to clear the cache. `create_listing` deliberately does NOT invalidate:
+it inserts a pending bid, and `BOARD_SQL` filters pending rows out with
+`HAVING total > 0`, so the board cannot have changed.
 
 - [ ] **Step 5: Run tests**
 
 Run: `pytest tests/test_ownership.py -v`
-Expected: 9 passed.
+Expected: 11 passed.
 
 `pytest tests/ -v` will now fail in `main.py` because `/submit` still calls the old `create_listing`. Task 13 fixes that. If you want a green suite between tasks, run only the files named in each task.
 
@@ -2121,7 +2184,7 @@ def current_user(request: Request) -> dict | None:
 
 def set_session_cookie(resp, token: str) -> None:
     resp.set_cookie(USER_COOKIE, token, httponly=True, samesite="lax",
-                    secure=secure_cookies(), max_age=auth.SESSION_DAYS * 86400)
+                    secure=secure_cookies(), max_age=db.SESSION_TTL)
 
 
 def csrf_for(request: Request) -> str:

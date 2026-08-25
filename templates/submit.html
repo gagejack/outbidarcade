@@ -18,6 +18,7 @@
   {% if error %}<p class="alert">{{ error }}</p>{% endif %}
 
   <form class="card form" method="post" action="/submit" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
     <label>Game name
       <input name="title" maxlength="70" required value="{{ form.title or '' }}" placeholder="Cursed Delve">
     </label>
@@ -76,8 +77,10 @@
 
     <input class="honeypot" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
     <button class="btn btn-big" type="submit">Reserve my spot</button>
-    <p class="tiny muted">Next you get a private link with payment details. Your listing goes live
-    once the operator confirms the payment. Bids are final and never refunded.</p>
+    <p class="tiny muted">{% if user %}This goes on your account at
+    {{ user.email }}.{% else %}You will sign in on the next screen — nothing you
+    typed here is lost.{% endif %} Your listing goes live once the operator
+    confirms the payment. Bids are final and never refunded.</p>
   </form>
 </main>
 {% endblock %}

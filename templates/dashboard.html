@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}My games · {{ site_name }}{% endblock %}
+{% block body %}
+<main class="page narrow">
+  <p class="kicker">Signed in as {{ user.email }}</p>
+  <h1>My games</h1>
+
+  {% if listings %}
+  <div class="dash-list">
+    {% for l in listings %}
+    <div class="card dash-row">
+      <div>
+        <h2>{{ l.title }}</h2>
+        <p class="muted small">{{ l.tagline }}</p>
+        <p class="mono">{{ l.total | money }}
+          {% if l.pending_count %}<span class="tag tag-pending">payment pending</span>
+          {% elif l.hidden %}<span class="tag">hidden</span>
+          {% elif l.total > 0 %}<span class="tag tag-confirmed">live</span>{% endif %}
+        </p>
+      </div>
+      <div class="dash-actions">
+        <a class="btn btn-small" href="/listing/{{ l.id }}">Manage</a>
+        <a class="btn btn-small btn-ghost" href="/listing/{{ l.id }}/edit">Edit</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card">
+    <p>Nothing here yet.</p>
+    <a class="btn btn-big" href="/submit">List a game</a>
+  </div>
+  {% endif %}
+
+  <p class="tiny muted"><a href="/account">Account settings</a></p>
+</main>
+{% endblock %}

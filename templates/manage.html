@@ -4,7 +4,7 @@
 
 {% block body %}
 <main class="page narrow">
-  <p class="kicker">Your private listing page</p>
+  <p class="kicker">Your listing</p>
   <h1>{{ listing.title }}</h1>
   <p class="lede">{{ listing.tagline }}</p>
 
@@ -45,7 +45,8 @@
     <h2>Top up</h2>
     <p class="muted small">Bids stack. Every confirmed dollar adds to your total, forever.</p>
     {% if error %}<p class="alert">{{ error }}</p>{% endif %}
-    <form class="form inline-form" method="post" action="/listing/{{ listing.manage_token }}/topup">
+    <form class="form inline-form" method="post" action="/listing/{{ listing.id }}/topup">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="bid-input">
         <span class="dollar">$</span>
         <input name="amount" inputmode="numeric" required placeholder="{{ (stats.top - listing.total + 1) if stats.top >= listing.total else min_top_up }}">
@@ -66,10 +67,10 @@
   </div>
 
   <div class="card">
-    <h2>Keep this link</h2>
-    <p class="muted small">This page is your listing. Anyone with the link can top it up, so keep it
-    to yourself and bookmark it now.</p>
-    <input class="copy-field" readonly value="{{ request.base_url }}listing/{{ listing.manage_token }}" onclick="this.select()">
+    <h2>Listing details</h2>
+    <p class="muted small">Name, pitch, link, art and platforms can be changed at
+    any time. Your total and rank stay as they are.</p>
+    <a class="btn" href="/listing/{{ listing.id }}/edit">Edit listing</a>
   </div>
 </main>
 {% endblock %}

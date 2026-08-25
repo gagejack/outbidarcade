@@ -268,7 +268,7 @@ input:focus, textarea:focus { outline: 2px solid rgba(77, 240, 255, .5); outline
 .rules p { color: #c4c4d8; }
 
 .game-card { text-align: center; }
-.game-art { width: 100%; max-height: 260px; object-fit: cover; border-radius: 12px; border: 1px solid var(--line); margin-bottom: 1rem; }
+.game-art { width: 100%; height: 260px; object-fit: contain; background: #000; border-radius: 12px; border: 1px solid var(--line); margin-bottom: 1rem; }
 .rank-badge { font-family: var(--mono); font-size: 2rem; font-weight: 800; color: var(--gold); margin: 0; }
 .game-card .lede { margin: 0 auto 1rem; }
 .game-card .champion-actions { justify-content: center; }
@@ -292,3 +292,15 @@ input:focus, textarea:focus { outline: 2px solid rgba(77, 240, 255, .5); outline
   .topbar nav { gap: .8rem; font-size: .85rem; }
   .admin-table td.actions { flex-direction: column; }
 }
+
+.provider-card { display: grid; gap: .6rem; }
+.btn-provider { display: block; text-align: center; }
+.inline-logout { display: inline; }
+.linkish { background: none; border: 0; padding: 0; font: inherit;
+           color: inherit; cursor: pointer; text-decoration: underline; }
+
+.dash-list { display: grid; gap: 1rem; }
+.dash-row { display: flex; justify-content: space-between; align-items: center;
+            gap: 1rem; flex-wrap: wrap; }
+.dash-actions { display: flex; gap: .5rem; }
+ul.plain { list-style: none; padding: 0; display: grid; gap: .4rem; }
