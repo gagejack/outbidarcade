@@ -3,27 +3,29 @@
 
 {% block body %}
 <section class="hero">
-  <p class="kicker">One board. One number that matters.</p>
-  <h1>Pay to win, push your <span class="accent">game to the top</span>.</h1>
-  <p class="lede">Pay what you want to list your game. The amount you pay is your score. The board
-  sorts by score, bids never expire, and the only way past someone is through their wallet.</p>
+  <div class="marquee-frame">
+    <p class="kicker">Machine is live</p>
+    <h1>Pay to win, push your <span class="accent">game to the top</span>.</h1>
+    <p class="lede">Pay what you want to list your game. The amount you pay is your score. The board
+    sorts by score, bids never expire, and the only way past someone is through their wallet.</p>
 
-  <div class="hero-cta">
-    <a class="btn btn-big" href="/submit">List your game</a>
-    <span class="cta-note">
-      {% if stats.listings %}
-        {{ stats.to_lead | money }} takes #1 right now
-      {% else %}
-        The board is empty. {{ min_first | money }} makes you #1.
-      {% endif %}
-    </span>
-  </div>
+    <div class="hero-cta">
+      <a class="btn btn-big" href="/submit">Insert coin &rarr; list your game</a>
+      <span class="cta-note">
+        {% if stats.listings %}
+          {{ stats.to_lead | money }} takes #1 right now
+        {% else %}
+          The board is empty. {{ min_first | money }} makes you #1.
+        {% endif %}
+      </span>
+    </div>
 
-  <div class="tickers">
-    <div class="tick"><span class="tick-num" data-tick="top">{{ stats.top | money }}</span><span class="tick-label">Top bid</span></div>
-    <div class="tick"><span class="tick-num" data-tick="to_lead">{{ stats.to_lead | money }}</span><span class="tick-label">Cost to take #1</span></div>
-    <div class="tick"><span class="tick-num" data-tick="listings">{{ stats.listings }}</span><span class="tick-label">Games on the board</span></div>
-    <div class="tick"><span class="tick-num" data-tick="volume">{{ stats.volume | money }}</span><span class="tick-label">Total bid</span></div>
+    <div class="readout">
+      <div class="readout-cell"><span class="readout-num" data-tick="top">{{ stats.top | money }}</span><span class="readout-label">Top bid</span></div>
+      <div class="readout-cell"><span class="readout-num" data-tick="to_lead">{{ stats.to_lead | money }}</span><span class="readout-label">Cost to take #1</span></div>
+      <div class="readout-cell"><span class="readout-num" data-tick="listings">{{ stats.listings }}</span><span class="readout-label">Games on the board</span></div>
+      <div class="readout-cell"><span class="readout-num" data-tick="volume">{{ stats.volume | money }}</span><span class="readout-label">Total bid</span></div>
+    </div>
   </div>
 </section>
 
@@ -37,6 +39,7 @@
 
 <main class="board-wrap" id="board">
   {% if rows %}
+    <p class="section-label">High score table</p>
     {% set leader = rows[0] %}
     <article class="champion">
       <div class="champion-badge">#1 ON THE BOARD</div>
