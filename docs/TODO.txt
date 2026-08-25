@@ -143,7 +143,15 @@ Redeploy after a git push:
   docker stop outbid-arcade
   docker rm outbid-arcade
   docker run -d --name outbid-arcade -p 8080:8080 \
-    -v ~/outbid-data:/data --restart unless-stopped outbid-arcade
+    -v ~/outbid-data:/data \
+    --env-file ~/outbid.env \
+    --restart unless-stopped outbid-arcade
+
+Stripe secrets live in ~/outbid.env (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET),
+OUTSIDE ~/outbidarcade on purpose — that keeps them out of the Docker build
+context, so `COPY . .` in the Dockerfile never bakes them into the image.
+--env-file loads them as real env vars in the running container instead.
+Never move this file inside the repo directory.
 
 Check things:
   docker ps
